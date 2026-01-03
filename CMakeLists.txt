@@ -1,0 +1,78 @@
+cmake_minimum_required(VERSION 4.1)
+project(sip_gateway LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(SIPGATEWAY_WARNINGS
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(Dependencies)
+include(FetchContent)
+
+if(NOT TARGET pjsip)
+    message(FATAL_ERROR "PJSIP is required. Ensure SIPGATEWAY_BUILD_PJSIP is enabled.")
+endif()
+
+add_executable(sip_gateway
+    src/main.cpp
+    src/config.cpp
+    src/logging.cpp
+    src/audio/port.cpp
+    src/audio/player.cpp
+    src/audio/recorder.cpp
+    src/utils/async.cpp
+    src/sip/app.cpp
+    include/sip_gateway/config.hpp
+    include/sip_gateway/logging.hpp
+    include/sip_gateway/audio/port.hpp
+    include/sip_gateway/audio/player.hpp
+    include/sip_gateway/audio/recorder.hpp
+    include/sip_gateway/utils/async.hpp
+    include/sip_gateway/sip/app.hpp
+)
+
+target_compile_features(sip_gateway PRIVATE cxx_std_17)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(sip_gateway PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(sip_gateway PRIVATE ${SIPGATEWAY_WARNINGS})
+if(TARGET spdlog::spdlog)
+    target_link_libraries(sip_gateway PRIVATE spdlog::spdlog)
+endif()
+if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(sip_gateway PRIVATE nlohmann_json::nlohmann_json)
+endif()
+if(TARGET httplib::httplib)
+    target_link_libraries(sip_gateway PRIVATE httplib::httplib)
+endif()
+target_link_libraries(sip_gateway PRIVATE pjsip)
+if(TARGET pjproject)
+    add_dependencies(sip_gateway pjproject)
+endif()
+
+if(SIPGATEWAY_FETCH_DEPS)
+    FetchContent_GetProperties(spdlog)
+    if(spdlog_POPULATED)
+        target_include_directories(sip_gateway PRIVATE ${spdlog_SOURCE_DIR}/include)
+        include_directories(${spdlog_SOURCE_DIR}/include)
+    endif()
+    FetchContent_GetProperties(nlohmann_json)
+    if(nlohmann_json_POPULATED)
+        include_directories(${nlohmann_json_SOURCE_DIR}/include)
+    endif()
+    FetchContent_GetProperties(httplib)
+    if(httplib_POPULATED)
+        include_directories(${httplib_SOURCE_DIR})
+    endif()
+endif()
+
+if(SIPGATEWAY_BUILD_ONNX AND SIPGATEWAY_ONNX_INCLUDE_DIR)
+    target_include_directories(sip_gateway PRIVATE ${SIPGATEWAY_ONNX_INCLUDE_DIR})
+endif()

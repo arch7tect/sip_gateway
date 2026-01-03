@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  sip-gateway:
+    build: .
+    ports:
+      - "8000:8000"
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+    environment:
+      - BACKEND_URL=${BACKEND_URL}
+      - SIP_USER=${SIP_USER}
+      - SIP_DOMAIN=${SIP_DOMAIN}
+      - SIP_PASSWORD=${SIP_PASSWORD}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
