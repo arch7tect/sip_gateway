@@ -2,6 +2,7 @@
 .env
 .idea/
 .vscode/
+AGENTS.md
 
 build/
 cmake-build-*/
