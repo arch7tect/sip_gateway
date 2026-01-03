@@ -13,6 +13,7 @@ set(SIPGATEWAY_DEPS_PREFIX "${CMAKE_BINARY_DIR}/deps" CACHE PATH "Third-party in
 set(SIPGATEWAY_PJSIP_VERSION "2.16" CACHE STRING "PJSIP version")
 set(SIPGATEWAY_OPUS_VERSION "1.5.2" CACHE STRING "Opus version")
 set(SIPGATEWAY_ONNX_VERSION "1.23.2" CACHE STRING "ONNX Runtime version")
+set(SIPGATEWAY_OPENSSL_PREFIX "" CACHE PATH "OpenSSL prefix for PJSIP (optional)")
 
 if(SIPGATEWAY_FETCH_DEPS)
     set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
@@ -70,6 +71,29 @@ if(SIPGATEWAY_BUILD_OPUS)
 endif()
 
 if(SIPGATEWAY_BUILD_PJSIP)
+    if(NOT SIPGATEWAY_OPENSSL_PREFIX)
+        if(APPLE)
+            if(EXISTS "/opt/homebrew/opt/openssl@3")
+                set(SIPGATEWAY_OPENSSL_PREFIX "/opt/homebrew/opt/openssl@3")
+            endif()
+        elseif(UNIX)
+            set(SIPGATEWAY_OPENSSL_PREFIX "/usr")
+        endif()
+    endif()
+    set(_SIPGATEWAY_PJSIP_CONFIGURE_COMMAND <SOURCE_DIR>/configure)
+    if(APPLE)
+        set(_SIPGATEWAY_PKG_CONFIG_WRAPPER "${CMAKE_CURRENT_LIST_DIR}/pjproject_pkg_config.sh")
+        file(CHMOD
+            "${_SIPGATEWAY_PKG_CONFIG_WRAPPER}"
+            PERMISSIONS
+                OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE
+        )
+        set(_SIPGATEWAY_PJSIP_CONFIGURE_COMMAND
+            ${CMAKE_COMMAND} -E env PKG_CONFIG=${_SIPGATEWAY_PKG_CONFIG_WRAPPER} <SOURCE_DIR>/configure
+        )
+    endif()
     set(_SIPGATEWAY_PJSIP_LIB_NAMES
         libpjsua2
         libpjsua
@@ -117,7 +141,14 @@ if(SIPGATEWAY_BUILD_PJSIP)
     ExternalProject_Add(
         pjproject
         URL https://github.com/pjsip/pjproject/archive/refs/tags/${SIPGATEWAY_PJSIP_VERSION}.tar.gz
-        CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --with-opus=${SIPGATEWAY_OPUS_PREFIX}
+        CONFIGURE_COMMAND ${_SIPGATEWAY_PJSIP_CONFIGURE_COMMAND}
+            --prefix=<INSTALL_DIR>
+            --with-opus=${SIPGATEWAY_OPUS_PREFIX}
+            --enable-ssl
+            --with-ssl=${SIPGATEWAY_OPENSSL_PREFIX}
+            --enable-srtp
+            --disable-shared
+            --enable-static
         BUILD_COMMAND make -j4
         INSTALL_COMMAND
             make install
@@ -130,13 +161,22 @@ if(SIPGATEWAY_BUILD_PJSIP)
         BUILD_BYPRODUCTS ${SIPGATEWAY_PJSIP_LIBS}
         DEPENDS opus
     )
+    ExternalProject_Add_StepTargets(pjproject install)
+    ExternalProject_Add_Step(
+        pjproject
+        ensure_install
+        COMMAND ${CMAKE_COMMAND} -E echo "Ensuring pjproject install step completed"
+        DEPENDEES install
+        ALWAYS TRUE
+    )
+    ExternalProject_Add_StepTargets(pjproject ensure_install)
 
     set(SIPGATEWAY_PJSIP_PREFIX ${SIPGATEWAY_DEPS_PREFIX}/pjproject CACHE PATH "")
     set(SIPGATEWAY_PJSIP_INCLUDE_DIR ${SIPGATEWAY_PJSIP_PREFIX}/include CACHE PATH "")
     set(SIPGATEWAY_PJSIP_LIB_DIR ${SIPGATEWAY_PJSIP_PREFIX}/lib CACHE PATH "")
 
     add_library(pjsip INTERFACE)
-    add_dependencies(pjsip pjproject)
+    add_dependencies(pjsip pjproject-install pjproject-ensure_install)
     add_dependencies(pjsip opus)
     target_include_directories(pjsip INTERFACE ${SIPGATEWAY_PJSIP_INCLUDE_DIR})
     target_link_directories(pjsip INTERFACE ${SIPGATEWAY_PJSIP_LIB_DIR})
@@ -161,13 +201,20 @@ if(SIPGATEWAY_BUILD_PJSIP)
             list(APPEND _SIPGATEWAY_PJPROJECT_LDOPTS "${_flag}")
         endforeach()
         list(REMOVE_DUPLICATES _SIPGATEWAY_PJPROJECT_LDOPTS)
+        set(_SIPGATEWAY_PJPROJECT_LIBS_FILTERED "")
+        foreach(_lib IN LISTS _SIPGATEWAY_PJPROJECT_LIBS)
+            list(FIND SIPGATEWAY_PJSIP_LINK_NAMES "${_lib}" _pj_idx)
+            if(_pj_idx EQUAL -1)
+                list(APPEND _SIPGATEWAY_PJPROJECT_LIBS_FILTERED "${_lib}")
+            endif()
+        endforeach()
         target_include_directories(pjsip INTERFACE ${PJPROJECT_INCLUDE_DIRS})
         target_compile_options(pjsip INTERFACE ${PJPROJECT_CFLAGS_OTHER})
         target_link_directories(pjsip INTERFACE ${PJPROJECT_LIBRARY_DIRS})
         target_link_options(pjsip INTERFACE ${_SIPGATEWAY_PJPROJECT_LDOPTS})
         target_link_libraries(pjsip INTERFACE
-            ${_SIPGATEWAY_PJPROJECT_LIBS}
-            ${SIPGATEWAY_PJSIP_LINK_NAMES}
+            ${SIPGATEWAY_PJSIP_LIBS}
+            ${_SIPGATEWAY_PJPROJECT_LIBS_FILTERED}
         )
         target_link_directories(pjsip INTERFACE ${SIPGATEWAY_OPUS_LIB_DIR})
         target_link_libraries(pjsip INTERFACE opus)
@@ -175,6 +222,8 @@ if(SIPGATEWAY_BUILD_PJSIP)
             target_link_options(pjsip INTERFACE
                 "SHELL:-framework CoreAudio -framework AudioUnit -framework AudioToolbox -framework CoreServices -framework Foundation -framework AppKit -framework AVFoundation -framework CoreGraphics -framework QuartzCore -framework CoreVideo -framework CoreMedia -framework Metal -framework MetalKit -framework VideoToolbox"
             )
+        elseif(UNIX)
+            target_link_libraries(pjsip INTERFACE ssl crypto asound uuid opencore-amrnb opencore-amrwb)
         endif()
     else()
         target_compile_definitions(pjsip INTERFACE
@@ -188,6 +237,8 @@ if(SIPGATEWAY_BUILD_PJSIP)
             target_link_options(pjsip INTERFACE
                 "SHELL:-framework CoreAudio -framework AudioUnit -framework AudioToolbox -framework CoreServices -framework Foundation -framework AppKit -framework AVFoundation -framework CoreGraphics -framework QuartzCore -framework CoreVideo -framework CoreMedia -framework Metal -framework MetalKit -framework VideoToolbox"
             )
+        elseif(UNIX)
+            target_link_libraries(pjsip INTERFACE ssl crypto asound uuid opencore-amrnb opencore-amrwb)
         endif()
     endif()
 endif()

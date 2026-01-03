@@ -6,6 +6,8 @@ RUN apt-get update && \
         cmake \
         pkg-config \
         ca-certificates \
+        git \
+        libasound2-dev \
         libavcodec-dev \
         libavdevice-dev \
         libavformat-dev \
@@ -14,14 +16,28 @@ RUN apt-get update && \
         libopencore-amrnb-dev \
         libopencore-amrwb-dev \
         libssl-dev \
+        libuuid1 \
         libsdl2-dev \
-        libswscale-dev && \
+        libswscale-dev \
+        wget && \
     rm -rf /var/lib/apt/lists/*
+
+RUN arch="$(dpkg --print-architecture)" && \
+    if [ "$arch" = "arm64" ]; then \
+        cmake_arch="aarch64"; \
+    else \
+        cmake_arch="x86_64"; \
+    fi && \
+    wget -qO /tmp/cmake.sh "https://github.com/Kitware/CMake/releases/download/v4.1.0/cmake-4.1.0-linux-${cmake_arch}.sh" && \
+    sh /tmp/cmake.sh --skip-license --prefix=/usr/local && \
+    rm -f /tmp/cmake.sh
 
 WORKDIR /app
 COPY . /app
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build --target pjproject-install && \
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build
 
 FROM ubuntu:24.04
@@ -29,6 +45,7 @@ FROM ubuntu:24.04
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
+        alsa-utils \
         libavcodec60 \
         libavdevice60 \
         libavformat60 \
@@ -38,6 +55,7 @@ RUN apt-get update && \
         libopencore-amrwb0 \
         libsdl2-2.0-0 \
         libssl3 \
+        libuuid1 \
         libswscale7 && \
     rm -rf /var/lib/apt/lists/*
 
