@@ -107,6 +107,22 @@ if(DEFINED SIPGATEWAY_PJSIP_INCLUDE_DIR)
     endif()
     add_dependencies(sip_gateway pjsip-config-site)
 endif()
+
+if(TARGET Catch2::Catch2WithMain)
+    enable_testing()
+    add_executable(sip_gateway_tests
+        tests/test_http_utils.cpp
+        src/utils/http.cpp
+        src/logging.cpp
+        include/sip_gateway/utils/http.hpp
+        include/sip_gateway/logging.hpp
+    )
+    target_compile_features(sip_gateway_tests PRIVATE cxx_std_17)
+    target_include_directories(sip_gateway_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(sip_gateway_tests PRIVATE Catch2::Catch2WithMain spdlog::spdlog OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(sip_gateway_tests PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    add_test(NAME sip_gateway_tests COMMAND sip_gateway_tests)
+endif()
 if(DEFINED SIPGATEWAY_PJSIP_LIB_NAMES_CSV AND SIPGATEWAY_PJSIP_LIB_DIR)
     add_custom_command(TARGET sip_gateway PRE_LINK
         COMMAND ${CMAKE_COMMAND}
