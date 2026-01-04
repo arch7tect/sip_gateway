@@ -36,6 +36,7 @@ add_executable(sip_gateway
     src/audio/recorder.cpp
     src/utils/async.cpp
     src/utils/http.cpp
+    src/utils/text.cpp
     src/sip/app.cpp
     src/sip/account.cpp
     src/sip/call.cpp
@@ -53,6 +54,7 @@ add_executable(sip_gateway
     include/sip_gateway/audio/recorder.hpp
     include/sip_gateway/utils/async.hpp
     include/sip_gateway/utils/http.hpp
+    include/sip_gateway/utils/text.hpp
     include/sip_gateway/sip/app.hpp
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
@@ -112,9 +114,12 @@ if(TARGET Catch2::Catch2WithMain)
     enable_testing()
     add_executable(sip_gateway_tests
         tests/test_http_utils.cpp
+        tests/test_text_utils.cpp
         src/utils/http.cpp
+        src/utils/text.cpp
         src/logging.cpp
         include/sip_gateway/utils/http.hpp
+        include/sip_gateway/utils/text.hpp
         include/sip_gateway/logging.hpp
     )
     target_compile_features(sip_gateway_tests PRIVATE cxx_std_17)

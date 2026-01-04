@@ -79,7 +79,6 @@ private:
     bool ai_can_speak() const;
     bool is_active_ai_speech() const;
     bool is_same_unstable_text(const std::string& text) const;
-    static std::string normalize_text(const std::string& text);
     void clear_pending_tts();
     void enqueue_tts_text(const std::string& text, double delay_sec = 0.0);
     void play_pending_tts();

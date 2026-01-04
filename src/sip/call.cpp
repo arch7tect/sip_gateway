@@ -14,6 +14,7 @@
 #include "sip_gateway/metrics.hpp"
 #include "sip_gateway/sip/app.hpp"
 #include "sip_gateway/utils/async.hpp"
+#include "sip_gateway/utils/text.hpp"
 #include "sip_gateway/vad/model.hpp"
 
 namespace sip_gateway {
@@ -781,31 +782,8 @@ bool SipCall::is_same_unstable_text(const std::string& text) const {
     if (last_unstable_transcription_.empty()) {
         return false;
     }
-    return normalize_text(last_unstable_transcription_) == normalize_text(text);
-}
-
-std::string SipCall::normalize_text(const std::string& text) {
-    std::string normalized;
-    normalized.reserve(text.size());
-    bool in_space = false;
-    for (unsigned char ch : text) {
-        if (std::isspace(ch)) {
-            if (!in_space) {
-                normalized.push_back(' ');
-                in_space = true;
-            }
-        } else {
-            normalized.push_back(static_cast<char>(std::tolower(ch)));
-            in_space = false;
-        }
-    }
-    if (!normalized.empty() && normalized.front() == ' ') {
-        normalized.erase(normalized.begin());
-    }
-    if (!normalized.empty() && normalized.back() == ' ') {
-        normalized.pop_back();
-    }
-    return normalized;
+    return utils::normalize_text(last_unstable_transcription_) ==
+           utils::normalize_text(text);
 }
 
 void SipCall::schedule_soft_hangup() {
@@ -893,29 +871,30 @@ void SipCall::clear_pending_tts() {
 }
 
 void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
-    if (text.empty()) {
+    const auto sanitized = utils::remove_emojis(text);
+    if (sanitized.empty()) {
         return;
     }
     if (delay_sec > 0.0) {
-        utils::run_async([this, text, delay_sec]() {
+        utils::run_async([this, sanitized, delay_sec]() {
             std::this_thread::sleep_for(std::chrono::duration<double>(delay_sec));
-            enqueue_tts_text(text, 0.0);
+            enqueue_tts_text(sanitized, 0.0);
         });
         return;
     }
     if (!media_active_ || !player_) {
         logging::debug(
             "TTS queued (media inactive)",
-            {kv("text", text),
+            {kv("text", sanitized),
              kv("queue_size", static_cast<int>(pending_tts_.size() + 1)),
              kv("session_id", session_id_.value_or(""))});
-        pending_tts_.push_back(text);
+        pending_tts_.push_back(sanitized);
         return;
     }
     if (!session_id_) {
         logging::warn(
             "TTS skipped: session_id missing",
-            {kv("text", text)});
+            {kv("text", sanitized)});
         return;
     }
     try {
@@ -926,10 +905,10 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         }
         logging::debug(
             "TTS sending to SIP",
-            {kv("text", text),
+            {kv("text", sanitized),
              kv("session_id", session_id_.value_or(""))});
         const auto synth_start = std::chrono::steady_clock::now();
-        const auto blob = app_.synthesize_session_audio(*session_id_, text);
+        const auto blob = app_.synthesize_session_audio(*session_id_, sanitized);
         const auto synth_elapsed = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - synth_start).count();
         if (response_start) {
