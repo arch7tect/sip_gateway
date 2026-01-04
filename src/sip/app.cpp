@@ -305,9 +305,54 @@ RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
 
 RestResponse SipApp::handle_transfer_request(const std::string& session_id,
                                              const nlohmann::json& body) {
-    (void)body;
-    (void)session_id;
-    return {501, nlohmann::json{{"message", "transfer handling not implemented"}}};
+    auto logger = logging::get_logger();
+    if (!body.contains("to_uri") || !body["to_uri"].is_string()) {
+        return {400, nlohmann::json{{"message", "to_uri is required"}}};
+    }
+    const auto to_uri = body.at("to_uri").get<std::string>();
+    double transfer_delay = 1.0;
+    if (body.contains("transfer_delay") && body["transfer_delay"].is_number()) {
+        transfer_delay = body["transfer_delay"].get<double>();
+    }
+
+    std::shared_ptr<SipCall> call;
+    {
+        std::lock_guard<std::mutex> lock(calls_mutex_);
+        auto it = session_calls_.find(session_id);
+        if (it != session_calls_.end()) {
+            auto call_it = calls_.find(it->second);
+            if (call_it != calls_.end()) {
+                call = call_it->second;
+            }
+        }
+    }
+    if (!call) {
+        return {404, nlohmann::json{{"message", "session not found"}}};
+    }
+    try {
+        const auto info = call->getInfo();
+        if (info.state != PJSIP_INV_STATE_CONFIRMED) {
+            return {400, nlohmann::json{{"message", "call is not active"}}};
+        }
+    } catch (const pj::Error& ex) {
+        logger->error(with_kv(
+            "Failed to inspect call state",
+            {kv("reason", ex.reason),
+             kv("status", ex.status),
+             kv("session_id", session_id)}));
+        return {500, nlohmann::json{{"message", "call state error"}}};
+    }
+
+    call->set_transfer_target(to_uri, transfer_delay);
+    logger->info(with_kv(
+        "Transfer target set",
+        {kv("to_uri", to_uri),
+         kv("transfer_delay", transfer_delay),
+         kv("session_id", session_id)}));
+    return {200, nlohmann::json{{"status", "ok"},
+                                {"message", "Successfully transferred"},
+                                {"session_id", session_id},
+                                {"to_uri", to_uri}}};
 }
 
 void SipApp::handle_incoming_call(const std::shared_ptr<SipCall>& call,

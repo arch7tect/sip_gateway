@@ -110,6 +110,10 @@ void StreamingVadProcessor::cancel_user_salience() {
     user_silence_start_ = 0;
 }
 
+void StreamingVadProcessor::set_long_pause_suspended(bool suspended) {
+    long_pause_suspended_ = suspended;
+}
+
 float StreamingVadProcessor::get_smoothed_prob(const std::vector<float>& window) {
     std::vector<float> normalized = window;
     float max_amp = 0.0f;

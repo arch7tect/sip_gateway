@@ -41,6 +41,7 @@ public:
     void make_call(const std::string& to_uri);
     void answer(int status_code);
     void hangup(int status_code);
+    void set_transfer_target(const std::string& to_uri, double delay_sec);
 
     void connect_ws(BackendWsClient::MessageHandler on_message,
                     BackendWsClient::EventHandler on_timeout,
@@ -54,6 +55,7 @@ public:
 
     void onCallState(pj::OnCallStateParam& prm) override;
     void onCallMediaState(pj::OnCallMediaStateParam& prm) override;
+    void onCallTransferStatus(pj::OnCallTransferStatusParam& prm) override;
 
 private:
     void open_media();
@@ -71,6 +73,12 @@ private:
     void commit_session();
     void rollback_session();
     void handle_playback_finished();
+    bool start_transfer();
+    void schedule_soft_hangup();
+    bool ai_can_speak() const;
+    bool is_active_ai_speech() const;
+    bool is_same_unstable_text(const std::string& text) const;
+    static std::string normalize_text(const std::string& text);
     void clear_pending_tts();
     void enqueue_tts_text(const std::string& text, double delay_sec = 0.0);
     void play_pending_tts();
@@ -82,7 +90,14 @@ private:
     std::optional<std::string> session_id_;
     std::optional<std::string> greeting_;
     std::string to_uri_;
+    std::optional<std::string> transfer_target_;
+    double transfer_delay_sec_ = 1.0;
+    bool transfer_started_ = false;
+    std::mutex transfer_mutex_;
     bool media_active_ = false;
+    bool user_speaking_ = false;
+    bool soft_hangup_pending_ = false;
+    std::string last_unstable_transcription_;
     std::unique_ptr<pj::AudioMedia> audio_media_;
     std::unique_ptr<audio::AudioMediaPort> media_port_;
     std::unique_ptr<audio::CallRecorder> recorder_;

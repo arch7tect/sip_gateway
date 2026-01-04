@@ -42,6 +42,7 @@ public:
     void start_user_silence();
     void reset_user_salience();
     void cancel_user_salience();
+    void set_long_pause_suspended(bool suspended);
 
 private:
     void process_window(const std::vector<float>& window);

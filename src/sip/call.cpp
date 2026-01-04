@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 #include <thread>
+#include <cctype>
 
 #include "sip_gateway/logging.hpp"
 #include "sip_gateway/sip/app.hpp"
@@ -52,6 +53,13 @@ void SipCall::hangup(int status_code) {
     pj::Call::hangup(prm);
 }
 
+void SipCall::set_transfer_target(const std::string& to_uri, double delay_sec) {
+    std::lock_guard<std::mutex> lock(transfer_mutex_);
+    transfer_target_ = to_uri;
+    transfer_delay_sec_ = delay_sec;
+    transfer_started_ = false;
+}
+
 void SipCall::connect_ws(BackendWsClient::MessageHandler on_message,
                          BackendWsClient::EventHandler on_timeout,
                          BackendWsClient::EventHandler on_close) {
@@ -76,6 +84,16 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
     if (type == "message") {
         const auto text = message.value("message", "");
         if (!text.empty()) {
+            if (user_speaking_) {
+                logging::get_logger()->debug(with_kv(
+                    "WebSocket message discarded (user speaking)",
+                    {kv("session_id", session_id_.value_or(""))}));
+                return;
+            }
+            if (state_ == CallState::SpeculativeGenerate) {
+                pending_tts_.push_back(text);
+                return;
+            }
             enqueue_tts_text(text);
         }
         return;
@@ -84,12 +102,26 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         logging::get_logger()->debug(with_kv(
             "WebSocket end of stream",
             {kv("session_id", session_id_.value_or(""))}));
+        if (state_ == CallState::Finished) {
+            play_pending_tts();
+            handle_playback_finished();
+            return;
+        }
+        if (state_ == CallState::CommitGenerate || state_ == CallState::WaitForUser) {
+            play_pending_tts();
+        }
         return;
     }
     if (type == "eoc") {
         logging::get_logger()->debug(with_kv(
             "WebSocket end of conversation",
             {kv("session_id", session_id_.value_or(""))}));
+        if (app_.config().sip_early_eoc && state_ != CallState::SpeculativeGenerate) {
+            finished_ = true;
+            set_state(CallState::Finished);
+            play_pending_tts();
+            handle_playback_finished();
+        }
         return;
     }
     logging::get_logger()->debug(with_kv(
@@ -148,6 +180,21 @@ void SipCall::onCallMediaState(pj::OnCallMediaStateParam& prm) {
         logging::get_logger()->error(with_kv(
             "Call media handler exception",
             {kv("error", ex.what())}));
+    }
+}
+
+void SipCall::onCallTransferStatus(pj::OnCallTransferStatusParam& prm) {
+    logging::get_logger()->info(with_kv(
+        "Transfer status",
+        {kv("status", prm.statusCode),
+         kv("reason", prm.reason),
+         kv("final_notify", prm.finalNotify),
+         kv("session_id", session_id_.value_or(""))}));
+    if (prm.finalNotify) {
+        if (prm.statusCode >= 200 && prm.statusCode < 300) {
+            hangup(PJSIP_SC_OK);
+        }
+        prm.cont = false;
     }
 }
 
@@ -297,6 +344,12 @@ void SipCall::close_media() {
 }
 
 void SipCall::handle_audio_frame(const std::vector<int16_t>& data) {
+    if (finished_) {
+        return;
+    }
+    if (!app_.config().interruptions_are_allowed && is_active_ai_speech()) {
+        return;
+    }
     if (vad_processor_) {
         vad_processor_->process_samples(data);
     }
@@ -313,6 +366,7 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
          kv("duration_sec", duration),
          kv("session_id", session_id_.value_or(""))}));
 
+    user_speaking_ = true;
     if (player_) {
         player_->interrupt();
     }
@@ -351,11 +405,19 @@ void SipCall::on_vad_speech_end(const std::vector<float>& audio,
         {kv("start_sec", start),
          kv("duration_sec", duration),
          kv("session_id", session_id_.value_or(""))}));
+    user_speaking_ = false;
 }
 
 void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                                  double start,
                                  double duration) {
+    if (duration < 2.5) {
+        logging::get_logger()->debug(with_kv(
+            "Short pause ignored (speech too short)",
+            {kv("duration_sec", duration),
+             kv("session_id", session_id_.value_or(""))}));
+        return;
+    }
     auto logger = logging::get_logger();
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
@@ -376,6 +438,17 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
             rollback_session();
             const auto text = transcribe_audio(audio_copy);
             if (!text.empty()) {
+                if (is_same_unstable_text(text)) {
+                    logging::get_logger()->debug(with_kv(
+                        "Speculation skipped (text unchanged)",
+                        {kv("session_id", session_id_.value_or(""))}));
+                    return;
+                }
+                clear_pending_tts();
+                if (player_) {
+                    player_->interrupt();
+                }
+                last_unstable_transcription_ = text;
                 start_session_text(text);
                 std::lock_guard<std::mutex> lock(generation_mutex_);
                 start_sent_ = true;
@@ -396,6 +469,12 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                                 double start,
                                 double duration) {
     auto logger = logging::get_logger();
+    if (audio.empty()) {
+        logger->debug(with_kv(
+            "Long pause ignored (empty buffer)",
+            {kv("session_id", session_id_.value_or(""))}));
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
         if (commit_in_flight_) {
@@ -411,6 +490,9 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
 
     auto audio_copy = audio;
     utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
+        if (vad_processor_) {
+            vad_processor_->set_long_pause_suspended(true);
+        }
         try {
             for (int i = 0; i < 200; ++i) {
                 {
@@ -440,6 +522,7 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                 set_state(CallState::SpeculativeGenerate);
             }
             set_state(CallState::CommitGenerate);
+            user_speaking_ = false;
             commit_session();
             std::lock_guard<std::mutex> lock(generation_mutex_);
             start_sent_ = false;
@@ -451,6 +534,9 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
         }
         std::lock_guard<std::mutex> lock(generation_mutex_);
         commit_in_flight_ = false;
+        if (vad_processor_) {
+            vad_processor_->set_long_pause_suspended(false);
+        }
     });
 }
 
@@ -541,22 +627,38 @@ void SipCall::commit_session() {
     if (!session_id_) {
         return;
     }
-    auto response = app_.commit_session(*session_id_);
-    if (response.contains("response") && response["response"].is_string()) {
-        const auto text = response["response"].get<std::string>();
-        if (!text.empty()) {
-            enqueue_tts_text(text);
-        }
-    }
-    if (response.contains("metadata") && response["metadata"].is_object()) {
-        const auto& metadata = response["metadata"];
-        if (metadata.contains("SESSION_ENDS") && metadata["SESSION_ENDS"].is_boolean()) {
-            if (metadata["SESSION_ENDS"].get<bool>()) {
-                finished_ = true;
-                set_state(CallState::Finished);
+    try {
+        auto response = app_.commit_session(*session_id_);
+        if (response.contains("response") && response["response"].is_string()) {
+            const auto text = response["response"].get<std::string>();
+            if (!text.empty()) {
+                enqueue_tts_text(text);
             }
         }
+        if (response.contains("metadata") && response["metadata"].is_object()) {
+            const auto& metadata = response["metadata"];
+            if (metadata.contains("SESSION_ENDS") && metadata["SESSION_ENDS"].is_boolean()) {
+                if (metadata["SESSION_ENDS"].get<bool>()) {
+                    finished_ = true;
+                    set_state(CallState::Finished);
+                }
+            }
+        }
+        if (!finished_) {
+            set_state(CallState::WaitForUser);
+        }
+        play_pending_tts();
+        if (finished_) {
+            handle_playback_finished();
+        }
+    } catch (const std::exception& ex) {
+        logging::get_logger()->error(with_kv(
+            "Commit failed",
+            {kv("error", ex.what()),
+             kv("session_id", session_id_.value_or(""))}));
+        set_state(CallState::WaitForUser);
     }
+    last_unstable_transcription_.clear();
 }
 
 void SipCall::rollback_session() {
@@ -588,7 +690,129 @@ void SipCall::handle_playback_finished() {
     if (!pending_tts_.empty()) {
         return;
     }
-    hangup(PJSIP_SC_OK);
+    schedule_soft_hangup();
+}
+
+bool SipCall::ai_can_speak() const {
+    return state_ == CallState::WaitForUser ||
+           state_ == CallState::CommitGenerate ||
+           state_ == CallState::Finished;
+}
+
+bool SipCall::is_active_ai_speech() const {
+    const bool player_active = player_ && player_->is_active();
+    const bool has_pending = !pending_tts_.empty() && ai_can_speak();
+    return player_active || has_pending || commit_in_flight_;
+}
+
+bool SipCall::is_same_unstable_text(const std::string& text) const {
+    if (last_unstable_transcription_.empty()) {
+        return false;
+    }
+    return normalize_text(last_unstable_transcription_) == normalize_text(text);
+}
+
+std::string SipCall::normalize_text(const std::string& text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    bool in_space = false;
+    for (unsigned char ch : text) {
+        if (std::isspace(ch)) {
+            if (!in_space) {
+                normalized.push_back(' ');
+                in_space = true;
+            }
+        } else {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+            in_space = false;
+        }
+    }
+    if (!normalized.empty() && normalized.front() == ' ') {
+        normalized.erase(normalized.begin());
+    }
+    if (!normalized.empty() && normalized.back() == ' ') {
+        normalized.pop_back();
+    }
+    return normalized;
+}
+
+void SipCall::schedule_soft_hangup() {
+    if (soft_hangup_pending_) {
+        return;
+    }
+    soft_hangup_pending_ = true;
+    utils::run_async([this]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        soft_hangup_pending_ = false;
+        if (!finished_) {
+            return;
+        }
+        if (player_ && player_->is_active()) {
+            return;
+        }
+        if (!pending_tts_.empty()) {
+            return;
+        }
+        if (start_transfer()) {
+            return;
+        }
+        hangup(PJSIP_SC_OK);
+    });
+}
+
+bool SipCall::start_transfer() {
+    std::string target;
+    double delay_sec = 1.0;
+    {
+        std::lock_guard<std::mutex> lock(transfer_mutex_);
+        if (!transfer_target_ || transfer_target_->empty() || transfer_started_) {
+            return false;
+        }
+        transfer_started_ = true;
+        target = *transfer_target_;
+        delay_sec = transfer_delay_sec_;
+    }
+    logging::get_logger()->info(with_kv(
+        "Transfer initiated",
+        {kv("to_uri", target),
+         kv("delay_sec", delay_sec),
+         kv("session_id", session_id_.value_or(""))}));
+
+    if (target.rfind("dtmf:", 0) == 0) {
+        const auto digits = target.substr(5);
+        if (!digits.empty()) {
+            try {
+                dialDtmf(digits);
+            } catch (const pj::Error& ex) {
+                logging::get_logger()->error(with_kv(
+                    "DTMF transfer failed",
+                    {kv("reason", ex.reason),
+                     kv("status", ex.status),
+                     kv("session_id", session_id_.value_or(""))}));
+            }
+        }
+        utils::run_async([this, delay_sec]() {
+            std::this_thread::sleep_for(std::chrono::duration<double>(delay_sec));
+            try {
+                hangup(PJSIP_SC_OK);
+            } catch (const pj::Error&) {
+            }
+        });
+        return true;
+    }
+
+    pj::CallOpParam prm(true);
+    try {
+        xfer(target, prm);
+    } catch (const pj::Error& ex) {
+        logging::get_logger()->error(with_kv(
+            "Transfer failed",
+            {kv("reason", ex.reason),
+             kv("status", ex.status),
+             kv("session_id", session_id_.value_or(""))}));
+        return false;
+    }
+    return true;
 }
 
 void SipCall::clear_pending_tts() {
