@@ -15,7 +15,7 @@ Defaults must match the Python service or be documented as deviations.
   - SIP/account: `SIP_USER`, `SIP_LOGIN`, `SIP_DOMAIN`, `SIP_PASSWORD`, `SIP_CALLER_ID`, `SIP_PORT`, `SIP_USE_TCP`, `SIP_USE_ICE`, `SIP_STUN_SERVERS`, `SIP_PROXY_SERVERS`
   - Audio: `SIP_NULL_DEVICE`, `SIP_AUDIO_DIR`, `SIP_AUDIO_TMP_DIR`, `SIP_AUDIO_WAV_DIR`, `FRAME_TIME_USEC`, `CODECS_PRIORITY`, `RECORD_AUDIO_PARTS`
   - Timing: `EVENTS_DELAY`, `ASYNC_DELAY`, `SHORT_PAUSE_OFFSET_MS`, `LONG_PAUSE_OFFSET_MS`, `USER_SILENCE_TIMEOUT_MS`, `GREETING_DELAY_SEC`
-  - PJSIP: `UA_ZERO_THREAD_CNT`, `UA_MAIN_THREAD_ONLY`, `EC_TAIL_LEN`, `EC_NO_VAD`, `PJSIP_LOG_LEVEL`
+  - PJSIP: `UA_ZERO_THREAD_CNT`, `UA_MAIN_THREAD_ONLY`, `EC_TAIL_LEN`, `EC_NO_VAD`, `PJSIP_LOG_LEVEL`, `SIP_MAX_CALLS`, `SIP_MEDIA_THREAD_CNT`
   - Logging: `LOG_LEVEL`, `LOG_FILENAME`, `LOGS_DIR`
   - VAD: `VAD_MODEL_PATH`, `VAD_MODEL_URL`, `VAD_SAMPLING_RATE`, `VAD_THRESHOLD`, `VAD_MIN_SPEECH_DURATION_MS`, `VAD_MIN_SILENCE_DURATION_MS`, `VAD_SPEECH_PAD_MS`, `VAD_SPEECH_PROB_WINDOW`, `VAD_CORRECTION_DEBUG`, `VAD_CORRECTION_ENTER_THRESHOLD`, `VAD_CORRECTION_EXIT_THRESHOLD`
   - Backend/session: `SIP_REST_API_PORT`, `CALL_CONNECTION_TIMEOUT`, `INTERRUPTIONS_ARE_ALLOWED`
@@ -52,6 +52,8 @@ Defaults must match the Python service or be documented as deviations.
 - `LOG_FILENAME`: unset (if set, timestamp is appended)
 - `LOGS_DIR`: unset
 - `PJSIP_LOG_LEVEL`: `1`
+- `SIP_MAX_CALLS`: `32`
+- `SIP_MEDIA_THREAD_CNT`: `1`
 - `VAD_SAMPLING_RATE`: `16000`
 - `VAD_THRESHOLD`: `0.65`
 - `VAD_MIN_SPEECH_DURATION_MS`: `150`
@@ -94,6 +96,7 @@ Defaults must match the Python service or be documented as deviations.
 
 ## Intentional Deviations
 - `LOG_NAME`: C++ default is `sip_gateway` since there is no module `__name__` equivalent; behavior is otherwise identical when the env var is set.
+- `SIP_MAX_CALLS`: new runtime limit for C++; Python does not expose this knob. Compile-time cap is set to 64 in pjproject.
 
 ## Validation Plan
 - Source-of-truth references (Python code paths).

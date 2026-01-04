@@ -158,6 +158,7 @@ if(SIPGATEWAY_BUILD_PJSIP)
             --with-opus=${SIPGATEWAY_OPUS_PREFIX}
             --enable-ssl
             --with-ssl=${SIPGATEWAY_OPENSSL_PREFIX}
+            --with-config-site=${CMAKE_CURRENT_LIST_DIR}/pjsip_config_site.h
             --disable-shared
         BUILD_COMMAND make -j4
         INSTALL_COMMAND

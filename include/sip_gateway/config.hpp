@@ -18,6 +18,7 @@ struct Config {
     std::filesystem::path tmp_audio_dir;
     std::filesystem::path sip_audio_dir;
     int sip_port = 5060;
+    int sip_max_calls = 32;
     bool sip_use_tcp = true;
     bool sip_use_ice = false;
     std::vector<std::string> sip_stun_servers;
@@ -31,6 +32,7 @@ struct Config {
     bool ua_main_thread_only = true;
     int ec_tail_len = 200;
     bool ec_no_vad = false;
+    int sip_media_thread_cnt = 1;
     std::string log_level = "INFO";
     std::optional<std::string> log_filename;
     std::optional<std::filesystem::path> logs_dir;

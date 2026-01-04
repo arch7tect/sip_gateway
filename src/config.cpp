@@ -188,6 +188,7 @@ Config Config::load() {
     config.tmp_audio_dir = get_env_str("SIP_AUDIO_TMP_DIR", audio_base + "/tmp");
     config.sip_audio_dir = get_env_str("SIP_AUDIO_WAV_DIR", audio_base + "/wav");
     config.sip_port = get_env_int("SIP_PORT", 5060);
+    config.sip_max_calls = get_env_int("SIP_MAX_CALLS", 32);
     config.sip_use_tcp = get_env_bool("SIP_USE_TCP", true);
     config.sip_use_ice = get_env_bool("SIP_USE_ICE", false);
     config.sip_stun_servers = split_csv(get_env_str("SIP_STUN_SERVERS", ""));
@@ -205,6 +206,7 @@ Config Config::load() {
     config.ua_main_thread_only = get_env_bool("UA_MAIN_THREAD_ONLY", true);
     config.ec_tail_len = get_env_int("EC_TAIL_LEN", 200);
     config.ec_no_vad = get_env_bool("EC_NO_VAD", false);
+    config.sip_media_thread_cnt = get_env_int("SIP_MEDIA_THREAD_CNT", 1);
     config.log_level = get_env_str("LOG_LEVEL", "INFO");
 
     const auto log_filename_raw = get_env_str("LOG_FILENAME", "");
@@ -293,6 +295,12 @@ void Config::validate() const {
     }
     if (sip_rest_api_port <= 0) {
         throw std::runtime_error("SIP_REST_API_PORT must be positive");
+    }
+    if (sip_max_calls <= 0) {
+        throw std::runtime_error("SIP_MAX_CALLS must be positive");
+    }
+    if (sip_media_thread_cnt < 0) {
+        throw std::runtime_error("SIP_MEDIA_THREAD_CNT must be zero or positive");
     }
 }
 

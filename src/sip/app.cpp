@@ -427,8 +427,8 @@ void SipApp::init_pjsip() {
         ep_cfg.uaConfig.threadCnt = 0;
     }
     ep_cfg.uaConfig.mainThreadOnly = config_.ua_main_thread_only;
-    ep_cfg.uaConfig.maxCalls = 32;
-    ep_cfg.medConfig.threadCnt = 1;
+    ep_cfg.uaConfig.maxCalls = config_.sip_max_calls;
+    ep_cfg.medConfig.threadCnt = config_.sip_media_thread_cnt;
     ep_cfg.medConfig.hasIoqueue = true;
     ep_cfg.medConfig.noVad = config_.ec_no_vad;
     ep_cfg.medConfig.ecTailLen = config_.ec_tail_len;
