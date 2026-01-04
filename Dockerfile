@@ -62,6 +62,9 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY --from=builder /app/build/sip_gateway /usr/local/bin/sip_gateway
+COPY --from=builder /app/build/deps/onnxruntime/lib /app/build/deps/onnxruntime/lib
+
+ENV LD_LIBRARY_PATH=/app/build/deps/onnxruntime/lib
 
 ENV SIP_REST_API_PORT=8000
 EXPOSE 8000 5060/udp 5060/tcp

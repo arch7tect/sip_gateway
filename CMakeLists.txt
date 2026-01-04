@@ -36,6 +36,8 @@ add_executable(sip_gateway
     src/sip/account.cpp
     src/sip/call.cpp
     src/server/rest_server.cpp
+    src/vad/model.cpp
+    src/vad/processor.cpp
     include/sip_gateway/config.hpp
     include/sip_gateway/logging.hpp
     include/sip_gateway/backend/client.hpp
@@ -48,6 +50,8 @@ add_executable(sip_gateway
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
     include/sip_gateway/server/rest_server.hpp
+    include/sip_gateway/vad/model.hpp
+    include/sip_gateway/vad/processor.hpp
 )
 
 target_compile_features(sip_gateway PRIVATE cxx_std_17)
@@ -98,6 +102,17 @@ if(SIPGATEWAY_FETCH_DEPS)
     endif()
 endif()
 
-if(SIPGATEWAY_BUILD_ONNX AND SIPGATEWAY_ONNX_INCLUDE_DIR)
-    target_include_directories(sip_gateway PRIVATE ${SIPGATEWAY_ONNX_INCLUDE_DIR})
+if(NOT SIPGATEWAY_ONNX_INCLUDE_DIR OR NOT SIPGATEWAY_ONNX_LIB_DIR)
+    message(FATAL_ERROR "ONNX Runtime is required. Ensure SIPGATEWAY_BUILD_ONNX is enabled.")
+endif()
+
+target_include_directories(sip_gateway PRIVATE ${SIPGATEWAY_ONNX_INCLUDE_DIR})
+target_link_directories(sip_gateway PRIVATE ${SIPGATEWAY_ONNX_LIB_DIR})
+if(TARGET onnxruntime_iface)
+    target_link_libraries(sip_gateway PRIVATE onnxruntime_iface)
+endif()
+target_link_libraries(sip_gateway PRIVATE onnxruntime)
+target_compile_definitions(sip_gateway PRIVATE SIPGATEWAY_HAS_ONNX=1)
+if(TARGET onnxruntime_ep-install)
+    add_dependencies(sip_gateway onnxruntime_ep-install)
 endif()

@@ -2,6 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <httplib.h>
+#include <sstream>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -10,8 +16,103 @@
 #include "sip_gateway/sip/account.hpp"
 #include "sip_gateway/sip/call.hpp"
 #include "sip_gateway/server/rest_server.hpp"
+#include "sip_gateway/vad/model.hpp"
 
 namespace sip_gateway {
+
+namespace {
+
+void parse_url(const std::string& url, std::string& scheme, std::string& host,
+               int& port, std::string& base_path) {
+    std::string working = url;
+    scheme = "http";
+    base_path = "";
+    host.clear();
+    port = 0;
+
+    const auto scheme_pos = working.find("://");
+    if (scheme_pos != std::string::npos) {
+        scheme = working.substr(0, scheme_pos);
+        std::transform(scheme.begin(), scheme.end(), scheme.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        working = working.substr(scheme_pos + 3);
+    }
+
+    const auto path_pos = working.find('/');
+    if (path_pos != std::string::npos) {
+        base_path = working.substr(path_pos);
+        working = working.substr(0, path_pos);
+    } else {
+        base_path = "/";
+    }
+
+    const auto port_pos = working.find(':');
+    if (port_pos != std::string::npos) {
+        host = working.substr(0, port_pos);
+        port = std::stoi(working.substr(port_pos + 1));
+    } else {
+        host = working;
+        port = scheme == "https" ? 443 : 80;
+    }
+}
+
+bool download_file(const std::string& url, const std::filesystem::path& path) {
+    std::string scheme;
+    std::string host;
+    std::string base_path;
+    int port = 0;
+    parse_url(url, scheme, host, port, base_path);
+    if (host.empty()) {
+        return false;
+    }
+    std::unique_ptr<httplib::Client> http_client;
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    std::unique_ptr<httplib::SSLClient> https_client;
+    if (scheme == "https") {
+        https_client = std::make_unique<httplib::SSLClient>(host, port);
+        https_client->enable_server_certificate_verification(false);
+    } else
+#endif
+    {
+        http_client = std::make_unique<httplib::Client>(host, port);
+    }
+
+    auto get_response = [&](const std::string& path_part) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        if (https_client) {
+            return https_client->Get(path_part.c_str());
+        }
+#endif
+        return http_client->Get(path_part.c_str());
+    };
+
+    auto response = get_response(base_path);
+    if (!response || response->status < 200 || response->status >= 300) {
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary);
+    out.write(response->body.data(), static_cast<std::streamsize>(response->body.size()));
+    out.close();
+    return static_cast<bool>(out);
+}
+
+std::string url_encode(const std::string& value) {
+    std::ostringstream escaped;
+    escaped << std::hex << std::uppercase;
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+            escaped << ch;
+        } else {
+            escaped << '%' << std::setw(2) << std::setfill('0')
+                    << static_cast<int>(ch);
+        }
+    }
+    return escaped.str();
+}
+
+}
 
 SipApp::SipApp(Config config)
     : config_(std::move(config)),
@@ -30,6 +131,7 @@ void SipApp::init() {
         {kv("capabilities", capabilities.dump())}));
 
     init_pjsip();
+    init_vad();
     rest_server_ = std::make_unique<RestServer>(
         config_,
         [this](const nlohmann::json& body) { return handle_call_request(body); },
@@ -63,6 +165,20 @@ void SipApp::stop() {
         rest_server_->stop();
     }
     shutdown_pjsip();
+}
+
+const Config& SipApp::config() const {
+    return config_;
+}
+
+std::string SipApp::synthesize_session_audio(const std::string& session_id,
+                                             const std::string& text) {
+    const auto query = "text=" + url_encode(text) + "&format=wav";
+    return backend_client_.get_binary("/session/" + session_id + "/synthesize", query);
+}
+
+std::shared_ptr<vad::VadModel> SipApp::vad_model() const {
+    return vad_model_;
 }
 
 int SipApp::handle_events() {
@@ -142,17 +258,16 @@ RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
     }
     auto call = std::make_shared<SipCall>(*this, *account_, backend_url());
     bind_session(call, backend_session.session_id);
+    call->set_greeting(backend_session.greeting);
     call->connect_ws(
-        [logger](const nlohmann::json& message) {
-            logger->debug(with_kv(
-                "WebSocket message received",
-                {kv("message", message.dump())}));
+        [call](const nlohmann::json& message) {
+            call->handle_ws_message(message);
         },
-        [logger]() {
-            logger->info("WebSocket timeout received");
+        [call]() {
+            call->handle_ws_timeout();
         },
-        [logger]() {
-            logger->info("WebSocket close received");
+        [call]() {
+            call->handle_ws_close();
         });
     call->make_call(to_uri);
     register_call(call);
@@ -168,23 +283,21 @@ RestResponse SipApp::handle_transfer_request(const std::string& session_id,
 
 void SipApp::handle_incoming_call(const std::shared_ptr<SipCall>& call,
                                   const std::string& from_uri) {
-    auto logger = logging::get_logger();
     nlohmann::json env_info = nlohmann::json::object();
     auto call_info = call->getInfo();
     auto backend_session =
         create_backend_session(from_uri, "", call_info.callIdString, env_info, std::nullopt);
     bind_session(call, backend_session.session_id);
+    call->set_greeting(backend_session.greeting);
     call->connect_ws(
-        [logger](const nlohmann::json& message) {
-            logger->debug(with_kv(
-                "WebSocket message received",
-                {kv("message", message.dump())}));
+        [call](const nlohmann::json& message) {
+            call->handle_ws_message(message);
         },
-        [logger]() {
-            logger->info("WebSocket timeout received");
+        [call]() {
+            call->handle_ws_timeout();
         },
-        [logger]() {
-            logger->info("WebSocket close received");
+        [call]() {
+            call->handle_ws_close();
         });
     call->answer(PJSIP_SC_OK);
 }
@@ -284,6 +397,8 @@ void SipApp::init_pjsip() {
     endpoint_->libStart();
 
     pj::AccountConfig account_cfg;
+    account_cfg.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;
+    account_cfg.mediaConfig.srtpSecureSignaling = 0;
     if (config_.sip_caller_id) {
         account_cfg.idUri = "\"" + *config_.sip_caller_id + "\" <sip:" + config_.sip_user +
                             "@" + config_.sip_domain + ">";
@@ -305,6 +420,37 @@ void SipApp::init_pjsip() {
 
     account_ = std::make_unique<SipAccount>(*this);
     account_->create(account_cfg);
+}
+
+void SipApp::init_vad() {
+    if (vad_model_) {
+        return;
+    }
+    auto logger = logging::get_logger();
+    try {
+        if (!std::filesystem::exists(config_.vad_model_path)) {
+            logger->info(with_kv(
+                "VAD model file missing, downloading",
+                {kv("path", config_.vad_model_path.string()),
+                 kv("url", config_.vad_model_url)}));
+            if (config_.vad_model_url.empty() ||
+                !download_file(config_.vad_model_url, config_.vad_model_path)) {
+                throw std::runtime_error("failed to download VAD model");
+            }
+        }
+        vad_model_ = std::make_shared<vad::VadModel>(
+            config_.vad_model_path, config_.vad_sampling_rate);
+        logger->info(with_kv(
+            "VAD model loaded",
+            {kv("path", config_.vad_model_path.string()),
+             kv("sampling_rate", config_.vad_sampling_rate)}));
+    } catch (const std::exception& ex) {
+        logger->error(with_kv(
+            "VAD model load failed",
+            {kv("error", ex.what()),
+             kv("path", config_.vad_model_path.string())}));
+        throw;
+    }
 }
 
 void SipApp::shutdown_pjsip() {

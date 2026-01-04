@@ -19,6 +19,9 @@ namespace sip_gateway {
 
 class SipAccount;
 class SipCall;
+namespace vad {
+class VadModel;
+}
 
 class SipApp {
 public:
@@ -27,6 +30,10 @@ public:
     void init();
     void run();
     void stop();
+    const Config& config() const;
+    std::string synthesize_session_audio(const std::string& session_id,
+                                         const std::string& text);
+    std::shared_ptr<vad::VadModel> vad_model() const;
 
 private:
     friend class SipAccount;
@@ -38,6 +45,7 @@ private:
     };
 
     void init_pjsip();
+    void init_vad();
     void shutdown_pjsip();
     int handle_events();
     void handle_incoming_call(const std::shared_ptr<SipCall>& call, const std::string& from_uri);
@@ -61,6 +69,7 @@ private:
     BackendClient backend_client_;
     std::unique_ptr<pj::Endpoint> endpoint_;
     std::unique_ptr<SipAccount> account_;
+    std::shared_ptr<vad::VadModel> vad_model_;
     std::unordered_map<int, std::shared_ptr<SipCall>> calls_;
     std::unordered_map<std::string, int> session_calls_;
     std::mutex calls_mutex_;

@@ -526,6 +526,10 @@ LOG_LEVEL=DEBUG
 
 **Status**: Completed in repo (build scaffolding, env config with dotenv override, logging, scripts, Docker).
 
+**Current state note (build flow)**:
+- The current build is two-phase: build/install pjproject, then re-configure to pick up pkg-config output. It works but is not optimal.
+- **TODO (later)**: refactor CMake to a single-configure flow by wiring pjproject include/lib paths directly or generating the .pc file at configure time.
+
 #### 1.1 Build System Setup
 
 - **CMake Configuration**
@@ -537,99 +541,68 @@ LOG_LEVEL=DEBUG
 
 - **Directory Structure**
   ```
-  src/integrations/sip/cpp/
+  .
   ├── CMakeLists.txt
   ├── Dockerfile
-  ├── docker-compose.yml
-  ├── .gitlab-ci.yml
-  ├── .gitmodules
   ├── include/
-  │   ├── sip/
-  │   │   ├── app.hpp
-  │   │   ├── call.hpp
-  │   │   ├── account.hpp
-  │   │   ├── backend/
-  │   │   │   ├── client.hpp
-  │   │   │   └── websocket.hpp
-  │   │   ├── server/
-  │   │   │   └── rest_server.hpp
-  │   │   ├── audio/
-  │   │   │   ├── player.hpp
-  │   │   │   ├── recorder.hpp
-  │   │   │   └── port.hpp
-  │   │   ├── vad/
-  │   │   │   ├── model.hpp
-  │   │   │   └── processor.hpp
-  │   │   └── utils/
-  │   │       ├── config.hpp
-  │   │       ├── async.hpp
-  │   │       └── task_manager.hpp
+  │   └── sip_gateway/
+  │       ├── backend/
+  │       │   ├── client.hpp
+  │       │   └── ws_client.hpp
+  │       ├── server/
+  │       │   └── rest_server.hpp
+  │       ├── audio/
+  │       │   ├── player.hpp
+  │       │   ├── recorder.hpp
+  │       │   └── port.hpp
+  │       ├── sip/
+  │       │   ├── app.hpp
+  │       │   ├── account.hpp
+  │       │   └── call.hpp
+  │       ├── utils/
+  │       │   └── async.hpp
+  │       ├── config.hpp
+  │       └── logging.hpp
   ├── src/
   │   ├── main.cpp
-  │   ├── app.cpp
-  │   ├── call.cpp
-  │   ├── account.cpp
+  │   ├── config.cpp
+  │   ├── logging.cpp
   │   ├── backend/
   │   │   ├── client.cpp
-  │   │   └── websocket.cpp
+  │   │   └── ws_client.cpp
   │   ├── server/
   │   │   └── rest_server.cpp
   │   ├── audio/
   │   │   ├── player.cpp
   │   │   ├── recorder.cpp
   │   │   └── port.cpp
-  │   ├── vad/
-  │   │   ├── model.cpp
-  │   │   └── processor.cpp
+  │   ├── sip/
+  │   │   ├── app.cpp
+  │   │   ├── account.cpp
+  │   │   └── call.cpp
   │   └── utils/
-  │       ├── config.cpp
-  │       ├── async.cpp
-  │       └── task_manager.cpp
-  ├── third_party/
-  │   └── pjproject/                    # git submodule (pinned version)
-  ├── tests/
-  │   ├── unit/
-  │   └── integration/
-  └── scripts/
-      ├── build.sh
-      └── run.sh
+  │       └── async.cpp
+  ├── docs/
+  └── python/
   ```
 
 - **Dependencies Management**
 
-  **Build from Source (Git Submodules)**:
+  **Build from Source (ExternalProject)**:
   - **pjproject 2.16** - SIP protocol stack ([releases](https://github.com/pjsip/pjproject/releases))
-    - Git submodule: `https://github.com/pjsip/pjproject.git`
-    - Pin to stable tag: `2.16` (Nov 2025 - includes RTT, parallel conference bridge)
-    - Build with custom flags for WebRTC AEC, SRTP support
+    - Built via `ExternalProject` into `build/deps/pjproject`
+    - Configure flags set in `cmake/Dependencies.cmake` (WebRTC AEC, SRTP, Opus)
 
-  **System Dependencies** (via package manager or CMake FetchContent):
-  - **ONNX Runtime 1.23.2+** - VAD inference engine ([releases](https://github.com/microsoft/onnxruntime/releases))
-  - **cpp-httplib 0.28.0+** - Header-only HTTP/HTTPS client ([releases](https://github.com/yhirose/cpp-httplib/releases))
-  - **Crow 1.3.0+** or **Drogon 1.9.11+** - HTTP REST server ([Crow](https://github.com/CrowCpp/Crow/releases), [Drogon](https://github.com/drogonframework/drogon/releases))
-  - **nlohmann/json 3.12.0+** - JSON parsing, header-only ([releases](https://github.com/nlohmann/json/releases))
-  - **spdlog 1.16.0+** - Fast structured logging ([releases](https://github.com/gabime/spdlog/releases))
-  - **prometheus-cpp 1.2.4+** - Metrics collection ([releases](https://github.com/jupp0r/prometheus-cpp/releases))
-  - **Google Test 1.17.0+** - Testing framework, requires C++17 ([releases](https://github.com/google/googletest/releases))
+  **CMake FetchContent**:
+  - **spdlog 1.13.0**
+  - **nlohmann/json 3.11.3**
+  - **cpp-httplib 0.16.0**
+  - **websocketpp 0.8.2**
+  - **Asio** (standalone)
+  - **Catch2 3.5.4** (when tests land)
 
-- **Git Submodule Setup**
-
-  ```bash
-  # Initialize pjproject submodule
-  cd src/integrations/sip/cpp
-  git submodule add https://github.com/pjsip/pjproject.git third_party/pjproject
-  cd third_party/pjproject
-  git checkout 2.16  # Pin to stable version (Nov 2025)
-  git submodule update --init --recursive
-  ```
-
-  `.gitmodules`:
-  ```ini
-  [submodule "third_party/pjproject"]
-      path = third_party/pjproject
-      url = https://github.com/pjsip/pjproject.git
-      branch = 2.16-stable
-  ```
+  **System Dependencies** (via package manager):
+  - **ONNX Runtime** (pending VAD phase)
 
 - **CMakeLists.txt** (Root)
 
@@ -727,7 +700,7 @@ LOG_LEVEL=DEBUG
 
 #### 1.2 Configuration System
 
-**File**: `include/sip/utils/config.hpp`, `src/utils/config.cpp`
+**File**: `include/sip_gateway/config.hpp`, `src/config.cpp`
 
 - Implement `SipConfig` class with environment variable loading
 - Use `std::optional<T>` for optional configuration values
@@ -764,26 +737,19 @@ public:
 
 #### 1.3 Logging Infrastructure
 
-**File**: `include/sip/utils/logger.hpp`
+**File**: `include/sip_gateway/logging.hpp`, `src/logging.cpp`
 
-- Integrate spdlog for structured logging
-- Match Python logging format for consistency
-- Support for session-specific log files
+- Integrate spdlog
+- Log format uses `msg [key=value ...]` via `with_kv()` helper
 - Configure log levels from environment
 
 ```cpp
 #include <spdlog/spdlog.h>
 
-namespace sip::logging {
-    void init_logging(const std::string& log_level = "INFO");
-    std::shared_ptr<spdlog::logger> get_logger(const std::string& name);
-
-    // Macros for structured logging
-    #define LOG_INFO(logger, format, ...) \
-        logger->info(format, ##__VA_ARGS__)
-
-    #define LOG_ERROR(logger, format, ...) \
-        logger->error(format, ##__VA_ARGS__)
+namespace sip_gateway::logging {
+    void init(const Config& config);
+    std::shared_ptr<spdlog::logger> get_logger();
+    std::string with_kv(const std::string& message, std::initializer_list<KeyValue> items);
 }
 ```
 
@@ -793,7 +759,7 @@ namespace sip::logging {
 
 #### 2.1 Audio Port Implementation
 
-**File**: `include/sip/audio/port.hpp`, `src/audio/port.cpp`
+**File**: `include/sip_gateway/audio/port.hpp`, `src/audio/port.cpp`
 
 - Inherit from `pj::AudioMediaPort`
 - Implement frame callback handling
@@ -817,7 +783,7 @@ private:
 
 #### 2.2 Audio Player
 
-**File**: `include/sip/audio/player.hpp`, `src/audio/player.cpp`
+**File**: `include/sip_gateway/audio/player.hpp`, `src/audio/player.cpp`
 
 - Smart audio file queue management
 - Automatic file cleanup
@@ -861,7 +827,7 @@ private:
 
 #### 2.3 Call Recording
 
-**File**: `include/sip/audio/recorder.hpp`, `src/audio/recorder.cpp`
+**File**: `include/sip_gateway/audio/recorder.hpp`, `src/audio/recorder.cpp`
 
 Use PJSIP's built-in `pj::AudioMediaRecorder` class for WAV file recording. This provides automatic WAV format handling, buffering, and file I/O without needing custom implementation.
 
@@ -1187,7 +1153,7 @@ private:
 
 #### 4.1 Call State Machine
 
-**File**: `include/sip/call.hpp`, `src/call.cpp`
+**File**: `include/sip_gateway/sip/call.hpp`, `src/sip/call.cpp`
 
 - Implement call state management
 - Audio message queue
@@ -1283,7 +1249,7 @@ private:
 
 #### 4.2 Account Management
 
-**File**: `include/sip/account.hpp`, `src/account.cpp`
+**File**: `include/sip_gateway/sip/account.hpp`, `src/sip/account.cpp`
 
 ```cpp
 class Account : public pj::Account {
@@ -1306,7 +1272,7 @@ private:
 
 #### 5.1 Main Application
 
-**File**: `include/sip/app.hpp`, `src/app.cpp`
+**File**: `include/sip_gateway/sip/app.hpp`, `src/sip/app.cpp`
 
 - PJSIP endpoint management
 - Event loop integration
@@ -1359,7 +1325,7 @@ private:
 
 #### 5.2 Async Callback System
 
-**File**: `include/sip/utils/async.hpp`, `src/utils/async.cpp`
+**File**: `include/sip_gateway/utils/async.hpp`, `src/utils/async.cpp`
 
 - Bridge PJSIP callbacks to async operations
 - Thread pool for async tasks
@@ -1406,7 +1372,7 @@ private:
 
 #### 6.1 Backend HTTP Client
 
-**File**: `include/sip/backend/client.hpp`, `src/backend/client.cpp`
+**File**: `include/sip_gateway/backend/client.hpp`, `src/backend/client.cpp`
 
 Replace Python `ClientBotSession` with C++ HTTP client communicating with backend FastAPI service.
 
@@ -1477,7 +1443,7 @@ private:
 
 #### 6.2 WebSocket Client
 
-**File**: `include/sip/backend/websocket.hpp`, `src/backend/websocket.cpp`
+**File**: `include/sip_gateway/backend/ws_client.hpp`, `src/backend/ws_client.cpp`
 
 Replace Python WebSocket connection for streaming LLM responses.
 
@@ -1513,7 +1479,7 @@ private:
 
 #### 6.3 REST Server (SIP Control Endpoints)
 
-**File**: `include/sip/server/rest_server.hpp`, `src/server/rest_server.cpp`
+**File**: `include/sip_gateway/server/rest_server.hpp`, `src/server/rest_server.cpp`
 
 Expose REST endpoints for making/controlling calls (replaces Python `SipAppMixin`).
 
@@ -1700,6 +1666,23 @@ BENCHMARK(BM_VADProcessing);
 ```
 
 ### Phase 8: Deployment & Migration (Weeks 15-16)
+
+## Current State (Codebase Snapshot)
+
+- Build system, config loading, logging, and Docker setup are present.
+- REST server module is implemented and wired into SipApp.
+- Backend HTTP client + WebSocket client exist and are used for session creation and WS message flow.
+- SIP account/call/app classes exist with multi-call support and basic call lifecycle.
+- Audio port/player/recorder scaffolding exists, but not fully integrated into call media flow.
+- VAD/ONNX, task manager, metrics, and tests are not implemented yet.
+
+## Next Steps
+
+1) Wire SipCall media handling (audio port/player/recorder integration).
+2) Add VAD module (ONNX runtime + pause detection) and integrate with audio pipeline.
+3) Implement transfer handling and other call controls in REST API.
+4) Add metrics (prometheus-cpp or compatible approach) and basic health/diagnostics.
+5) Add tests (unit tests for config/logging, integration tests for call flow).
 
 #### 8.1 Build & Packaging
 

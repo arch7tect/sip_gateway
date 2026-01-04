@@ -7,7 +7,8 @@ option(SIPGATEWAY_BUILD_PJSIP "Build PJSIP from source" ON)
 set(SIPGATEWAY_BUILD_PJSIP ON CACHE BOOL "Build PJSIP from source" FORCE)
 option(SIPGATEWAY_BUILD_OPUS "Build Opus from source" ON)
 set(SIPGATEWAY_BUILD_OPUS ON CACHE BOOL "Build Opus from source" FORCE)
-option(SIPGATEWAY_BUILD_ONNX "Build ONNX Runtime from source" OFF)
+option(SIPGATEWAY_BUILD_ONNX "Build ONNX Runtime from source" ON)
+set(SIPGATEWAY_BUILD_ONNX ON CACHE BOOL "Build ONNX Runtime from source" FORCE)
 
 set(SIPGATEWAY_DEPS_PREFIX "${CMAKE_BINARY_DIR}/deps" CACHE PATH "Third-party install prefix")
 set(SIPGATEWAY_PJSIP_VERSION "2.16" CACHE STRING "PJSIP version")
@@ -157,9 +158,7 @@ if(SIPGATEWAY_BUILD_PJSIP)
             --with-opus=${SIPGATEWAY_OPUS_PREFIX}
             --enable-ssl
             --with-ssl=${SIPGATEWAY_OPENSSL_PREFIX}
-            --enable-srtp
             --disable-shared
-            --enable-static
         BUILD_COMMAND make -j4
         INSTALL_COMMAND
             make install
@@ -255,20 +254,57 @@ if(SIPGATEWAY_BUILD_PJSIP)
 endif()
 
 if(SIPGATEWAY_BUILD_ONNX)
+    set(_SIPGATEWAY_ONNX_OS "")
+    set(_SIPGATEWAY_ONNX_ARCH "")
+    if(APPLE)
+        set(_SIPGATEWAY_ONNX_OS "osx")
+    elseif(UNIX)
+        set(_SIPGATEWAY_ONNX_OS "linux")
+    endif()
+
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+        set(_SIPGATEWAY_ONNX_ARCH "arm64")
+        if(UNIX AND NOT APPLE)
+            set(_SIPGATEWAY_ONNX_ARCH "aarch64")
+        endif()
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+        set(_SIPGATEWAY_ONNX_ARCH "x64")
+    endif()
+
+    if(NOT _SIPGATEWAY_ONNX_OS OR NOT _SIPGATEWAY_ONNX_ARCH)
+        message(FATAL_ERROR "Unsupported platform for ONNX Runtime prebuilt package.")
+    endif()
+
+    set(_SIPGATEWAY_ONNX_PACKAGE "onnxruntime-${_SIPGATEWAY_ONNX_OS}-${_SIPGATEWAY_ONNX_ARCH}-${SIPGATEWAY_ONNX_VERSION}")
+    set(_SIPGATEWAY_ONNX_URL
+        "https://github.com/microsoft/onnxruntime/releases/download/v${SIPGATEWAY_ONNX_VERSION}/${_SIPGATEWAY_ONNX_PACKAGE}.tgz"
+    )
+    set(_SIPGATEWAY_ONNX_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/onnxruntime-src")
+
     ExternalProject_Add(
-        onnxruntime
-        URL https://github.com/microsoft/onnxruntime/archive/refs/tags/v${SIPGATEWAY_ONNX_VERSION}.tar.gz
+        onnxruntime_ep
+        URL ${_SIPGATEWAY_ONNX_URL}
         CONFIGURE_COMMAND ""
         BUILD_COMMAND ""
-        INSTALL_COMMAND ""
         UPDATE_COMMAND ""
-        BUILD_IN_SOURCE 1
-        INSTALL_DIR ${SIPGATEWAY_DEPS_PREFIX}/onnxruntime
+        SOURCE_DIR ${_SIPGATEWAY_ONNX_SOURCE_DIR}
+        INSTALL_COMMAND
+            ${CMAKE_COMMAND}
+                -D SOURCE_DIR=${_SIPGATEWAY_ONNX_SOURCE_DIR}
+                -D PACKAGE_NAME=${_SIPGATEWAY_ONNX_PACKAGE}
+                -D DEST_DIR=${SIPGATEWAY_DEPS_PREFIX}/onnxruntime
+                -P ${CMAKE_CURRENT_LIST_DIR}/onnxruntime_install.cmake
     )
+    ExternalProject_Add_StepTargets(onnxruntime_ep install)
 
     set(SIPGATEWAY_ONNX_PREFIX ${SIPGATEWAY_DEPS_PREFIX}/onnxruntime CACHE PATH "")
     set(SIPGATEWAY_ONNX_INCLUDE_DIR ${SIPGATEWAY_ONNX_PREFIX}/include CACHE PATH "")
     set(SIPGATEWAY_ONNX_LIB_DIR ${SIPGATEWAY_ONNX_PREFIX}/lib CACHE PATH "")
+
+    add_library(onnxruntime_iface INTERFACE)
+    add_dependencies(onnxruntime_iface onnxruntime_ep-install)
+    target_include_directories(onnxruntime_iface INTERFACE ${SIPGATEWAY_ONNX_INCLUDE_DIR})
+    target_link_directories(onnxruntime_iface INTERFACE ${SIPGATEWAY_ONNX_LIB_DIR})
 endif()
 
 if(SIPGATEWAY_FETCH_DEPS)
