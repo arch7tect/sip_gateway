@@ -529,6 +529,8 @@ LOG_LEVEL=DEBUG
 **Current state note (build flow)**:
 - The current build is two-phase: build/install pjproject, then re-configure to pick up pkg-config output. It works but is not optimal.
 - **TODO (later)**: refactor CMake to a single-configure flow by wiring pjproject include/lib paths directly or generating the .pc file at configure time.
+- **TODO (later)**: audit audio temp file lifecycle (TTS and recorded parts) to avoid leaks on failed calls or crashes.
+- **TODO (later)**: add backpressure/throttling around backend `/transcribe` and `/start` to avoid spikes under noisy audio.
 
 #### 1.1 Build System Setup
 

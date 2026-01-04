@@ -177,6 +177,35 @@ std::string SipApp::synthesize_session_audio(const std::string& session_id,
     return backend_client_.get_binary("/session/" + session_id + "/synthesize", query);
 }
 
+std::string SipApp::transcribe_audio(const std::string& wav_bytes) {
+    auto response = backend_client_.post_binary("/transcribe", "audio/wav", wav_bytes);
+    if (response.is_string()) {
+        return response.get<std::string>();
+    }
+    if (response.is_object() && response.contains("text") && response["text"].is_string()) {
+        return response["text"].get<std::string>();
+    }
+    return "";
+}
+
+nlohmann::json SipApp::start_session_text(const std::string& session_id,
+                                          const std::string& text) {
+    nlohmann::json payload;
+    payload["message"] = text;
+    payload["kwargs"] = nlohmann::json::object();
+    return backend_client_.post_json("/session/" + session_id + "/start", payload);
+}
+
+nlohmann::json SipApp::commit_session(const std::string& session_id) {
+    nlohmann::json payload = nlohmann::json::object();
+    return backend_client_.post_json("/session/" + session_id + "/commit", payload);
+}
+
+nlohmann::json SipApp::rollback_session(const std::string& session_id) {
+    nlohmann::json payload = nlohmann::json::object();
+    return backend_client_.post_json("/session/" + session_id + "/rollback", payload);
+}
+
 std::shared_ptr<vad::VadModel> SipApp::vad_model() const {
     return vad_model_;
 }

@@ -33,6 +33,11 @@ public:
     const Config& config() const;
     std::string synthesize_session_audio(const std::string& session_id,
                                          const std::string& text);
+    std::string transcribe_audio(const std::string& wav_bytes);
+    nlohmann::json start_session_text(const std::string& session_id,
+                                      const std::string& text);
+    nlohmann::json commit_session(const std::string& session_id);
+    nlohmann::json rollback_session(const std::string& session_id);
     std::shared_ptr<vad::VadModel> vad_model() const;
 
 private:

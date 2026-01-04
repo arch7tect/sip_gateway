@@ -1,9 +1,12 @@
 #include "sip_gateway/sip/call.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <thread>
 
 #include "sip_gateway/logging.hpp"
@@ -209,10 +212,11 @@ void SipCall::open_media() {
     player_ = std::make_unique<audio::SmartPlayer>(
         *audio_media_,
         recorder_media,
-        [logger, session_id = session_id_.value_or("")]() {
+        [this, logger, session_id = session_id_.value_or("")]() {
             logger->debug(with_kv(
                 "Audio playback finished",
                 {kv("session_id", session_id)}));
+            handle_playback_finished();
         });
     if (!vad_processor_) {
         auto model = app_.vad_model();
@@ -228,51 +232,24 @@ void SipCall::open_media() {
                 app_.config().user_silence_timeout_ms,
                 app_.config().vad_speech_prob_window);
             vad_processor_->set_on_speech_start(
-                [logger, session_id = session_id_.value_or("")](const std::vector<float>&,
-                                                                double start,
-                                                                double duration) {
-                    logger->debug(with_kv(
-                        "VAD speech start",
-                        {kv("start_sec", start),
-                         kv("duration_sec", duration),
-                         kv("session_id", session_id)}));
+                [this](const std::vector<float>& audio, double start, double duration) {
+                    on_vad_speech_start(audio, start, duration);
                 });
             vad_processor_->set_on_speech_end(
-                [logger, session_id = session_id_.value_or("")](const std::vector<float>&,
-                                                                double start,
-                                                                double duration) {
-                    logger->debug(with_kv(
-                        "VAD speech end",
-                        {kv("start_sec", start),
-                         kv("duration_sec", duration),
-                         kv("session_id", session_id)}));
+                [this](const std::vector<float>& audio, double start, double duration) {
+                    on_vad_speech_end(audio, start, duration);
                 });
             vad_processor_->set_on_short_pause(
-                [logger, session_id = session_id_.value_or("")](const std::vector<float>&,
-                                                                double start,
-                                                                double duration) {
-                    logger->debug(with_kv(
-                        "VAD short pause",
-                        {kv("start_sec", start),
-                         kv("duration_sec", duration),
-                         kv("session_id", session_id)}));
+                [this](const std::vector<float>& audio, double start, double duration) {
+                    on_vad_short_pause(audio, start, duration);
                 });
             vad_processor_->set_on_long_pause(
-                [logger, session_id = session_id_.value_or("")](const std::vector<float>&,
-                                                                double start,
-                                                                double duration) {
-                    logger->debug(with_kv(
-                        "VAD long pause",
-                        {kv("start_sec", start),
-                         kv("duration_sec", duration),
-                         kv("session_id", session_id)}));
+                [this](const std::vector<float>& audio, double start, double duration) {
+                    on_vad_long_pause(audio, start, duration);
                 });
             vad_processor_->set_on_user_silence_timeout(
-                [logger, session_id = session_id_.value_or("")](double current_time) {
-                    logger->debug(with_kv(
-                        "VAD user silence timeout",
-                        {kv("time_sec", current_time),
-                         kv("session_id", session_id)}));
+                [this](double current_time) {
+                    on_vad_user_silence_timeout(current_time);
                 });
         }
     }
@@ -319,6 +296,293 @@ void SipCall::handle_audio_frame(const std::vector<int16_t>& data) {
     if (vad_processor_) {
         vad_processor_->process_samples(data);
     }
+}
+
+void SipCall::on_vad_speech_start(const std::vector<float>& audio,
+                                  double start,
+                                  double duration) {
+    (void)audio;
+    auto logger = logging::get_logger();
+    logger->debug(with_kv(
+        "VAD speech start",
+        {kv("start_sec", start),
+         kv("duration_sec", duration),
+         kv("session_id", session_id_.value_or(""))}));
+
+    if (player_) {
+        player_->interrupt();
+    }
+    clear_pending_tts();
+    set_state(CallState::WaitForUser);
+
+    utils::run_async([this]() {
+        bool allow_rollback = false;
+        {
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            allow_rollback = !commit_in_flight_;
+        }
+        if (!allow_rollback) {
+            return;
+        }
+        try {
+            rollback_session();
+        } catch (const std::exception& ex) {
+            logging::get_logger()->warn(with_kv(
+                "Rollback failed",
+                {kv("error", ex.what()),
+                 kv("session_id", session_id_.value_or(""))}));
+        }
+    });
+}
+
+void SipCall::on_vad_speech_end(const std::vector<float>& audio,
+                                double start,
+                                double duration) {
+    (void)audio;
+    logging::get_logger()->debug(with_kv(
+        "VAD speech end",
+        {kv("start_sec", start),
+         kv("duration_sec", duration),
+         kv("session_id", session_id_.value_or(""))}));
+}
+
+void SipCall::on_vad_short_pause(const std::vector<float>& audio,
+                                 double start,
+                                 double duration) {
+    auto logger = logging::get_logger();
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        if (start_in_flight_ || commit_in_flight_ || start_sent_) {
+            return;
+        }
+        start_in_flight_ = true;
+    }
+    logger->debug(with_kv(
+        "VAD short pause",
+        {kv("start_sec", start),
+         kv("duration_sec", duration),
+         kv("session_id", session_id_.value_or(""))}));
+
+    auto audio_copy = audio;
+    utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
+        try {
+            rollback_session();
+            const auto text = transcribe_audio(audio_copy);
+            if (!text.empty()) {
+                start_session_text(text);
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                start_sent_ = true;
+                set_state(CallState::SpeculativeGenerate);
+            }
+        } catch (const std::exception& ex) {
+            logging::get_logger()->error(with_kv(
+                "Short pause handling failed",
+                {kv("error", ex.what()),
+                 kv("session_id", session_id_.value_or(""))}));
+        }
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        start_in_flight_ = false;
+    });
+}
+
+void SipCall::on_vad_long_pause(const std::vector<float>& audio,
+                                double start,
+                                double duration) {
+    auto logger = logging::get_logger();
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        if (commit_in_flight_) {
+            return;
+        }
+        commit_in_flight_ = true;
+    }
+    logger->debug(with_kv(
+        "VAD long pause",
+        {kv("start_sec", start),
+         kv("duration_sec", duration),
+         kv("session_id", session_id_.value_or(""))}));
+
+    auto audio_copy = audio;
+    utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
+        try {
+            for (int i = 0; i < 200; ++i) {
+                {
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    if (!start_in_flight_) {
+                        break;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            bool has_start = false;
+            {
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                has_start = start_sent_;
+            }
+            if (!has_start) {
+                const auto text = transcribe_audio(audio_copy);
+                if (text.empty()) {
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    commit_in_flight_ = false;
+                    return;
+                }
+                start_session_text(text);
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                start_sent_ = true;
+                set_state(CallState::SpeculativeGenerate);
+            }
+            set_state(CallState::CommitGenerate);
+            commit_session();
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            start_sent_ = false;
+        } catch (const std::exception& ex) {
+            logging::get_logger()->error(with_kv(
+                "Long pause handling failed",
+                {kv("error", ex.what()),
+                 kv("session_id", session_id_.value_or(""))}));
+        }
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        commit_in_flight_ = false;
+    });
+}
+
+void SipCall::on_vad_user_silence_timeout(double current_time) {
+    logging::get_logger()->debug(with_kv(
+        "VAD user silence timeout",
+        {kv("time_sec", current_time),
+         kv("session_id", session_id_.value_or(""))}));
+    finished_ = true;
+    set_state(CallState::Finished);
+    handle_playback_finished();
+}
+
+std::string SipCall::encode_wav(const std::vector<float>& audio) const {
+    const uint16_t channels = 1;
+    const uint16_t bits_per_sample = 16;
+    const uint32_t sample_rate = static_cast<uint32_t>(app_.config().vad_sampling_rate);
+    const uint16_t block_align = channels * (bits_per_sample / 8);
+    const uint32_t byte_rate = sample_rate * block_align;
+    const uint32_t data_size = static_cast<uint32_t>(audio.size() * sizeof(int16_t));
+    const uint32_t chunk_size = 36 + data_size;
+
+    std::string result;
+    result.reserve(44 + data_size);
+    auto append = [&result](const void* data, size_t size) {
+        result.append(static_cast<const char*>(data), size);
+    };
+    auto append_u16 = [&append](uint16_t value) {
+        const uint8_t bytes[2] = {
+            static_cast<uint8_t>(value & 0xFF),
+            static_cast<uint8_t>((value >> 8) & 0xFF)
+        };
+        append(bytes, sizeof(bytes));
+    };
+    auto append_u32 = [&append](uint32_t value) {
+        const uint8_t bytes[4] = {
+            static_cast<uint8_t>(value & 0xFF),
+            static_cast<uint8_t>((value >> 8) & 0xFF),
+            static_cast<uint8_t>((value >> 16) & 0xFF),
+            static_cast<uint8_t>((value >> 24) & 0xFF)
+        };
+        append(bytes, sizeof(bytes));
+    };
+
+    append("RIFF", 4);
+    append_u32(chunk_size);
+    append("WAVE", 4);
+    append("fmt ", 4);
+    append_u32(16);
+    append_u16(1);
+    append_u16(channels);
+    append_u32(sample_rate);
+    append_u32(byte_rate);
+    append_u16(block_align);
+    append_u16(bits_per_sample);
+    append("data", 4);
+    append_u32(data_size);
+
+    for (float sample : audio) {
+        const float clamped = std::max(-1.0f, std::min(1.0f, sample));
+        const int16_t pcm = static_cast<int16_t>(
+            clamped * std::numeric_limits<int16_t>::max());
+        append(&pcm, sizeof(pcm));
+    }
+
+    return result;
+}
+
+std::string SipCall::transcribe_audio(const std::vector<float>& audio) const {
+    if (!session_id_) {
+        return "";
+    }
+    const auto wav_bytes = encode_wav(audio);
+    return app_.transcribe_audio(wav_bytes);
+}
+
+void SipCall::start_session_text(const std::string& text) {
+    if (!session_id_) {
+        return;
+    }
+    if (text.empty()) {
+        return;
+    }
+    app_.start_session_text(*session_id_, text);
+}
+
+void SipCall::commit_session() {
+    if (!session_id_) {
+        return;
+    }
+    auto response = app_.commit_session(*session_id_);
+    if (response.contains("response") && response["response"].is_string()) {
+        const auto text = response["response"].get<std::string>();
+        if (!text.empty()) {
+            enqueue_tts_text(text);
+        }
+    }
+    if (response.contains("metadata") && response["metadata"].is_object()) {
+        const auto& metadata = response["metadata"];
+        if (metadata.contains("SESSION_ENDS") && metadata["SESSION_ENDS"].is_boolean()) {
+            if (metadata["SESSION_ENDS"].get<bool>()) {
+                finished_ = true;
+                set_state(CallState::Finished);
+            }
+        }
+    }
+}
+
+void SipCall::rollback_session() {
+    bool needs_rollback = false;
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        if ((start_in_flight_ || start_sent_) && !commit_in_flight_) {
+            needs_rollback = true;
+            start_sent_ = false;
+            start_in_flight_ = false;
+        }
+    }
+    if (!session_id_ || !needs_rollback) {
+        return;
+    }
+    app_.rollback_session(*session_id_);
+}
+
+void SipCall::handle_playback_finished() {
+    if (!finished_) {
+        return;
+    }
+    if (player_ && player_->is_active()) {
+        return;
+    }
+    if (!pending_tts_.empty()) {
+        return;
+    }
+    hangup(PJSIP_SC_OK);
+}
+
+void SipCall::clear_pending_tts() {
+    pending_tts_.clear();
 }
 
 void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
@@ -376,6 +640,35 @@ void SipCall::play_pending_tts() {
     for (const auto& text : pending) {
         enqueue_tts_text(text);
     }
+}
+
+void SipCall::set_state(CallState state) {
+    if (state_ == CallState::Finished && state != CallState::Finished) {
+        return;
+    }
+    if (state_ == state) {
+        return;
+    }
+    state_ = state;
+    const char* name = "unknown";
+    switch (state_) {
+        case CallState::WaitForUser:
+            name = "WAIT_FOR_USER";
+            break;
+        case CallState::SpeculativeGenerate:
+            name = "SPECULATIVE_GENERATE";
+            break;
+        case CallState::CommitGenerate:
+            name = "COMMIT_GENERATE";
+            break;
+        case CallState::Finished:
+            name = "FINISHED";
+            break;
+    }
+    logging::get_logger()->debug(with_kv(
+        "Call state change",
+        {kv("state", name),
+         kv("session_id", session_id_.value_or(""))}));
 }
 
 std::filesystem::path SipCall::make_tts_path() const {
