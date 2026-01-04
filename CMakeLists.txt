@@ -17,6 +17,9 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dependencies)
 include(FetchContent)
 find_package(OpenSSL)
+if(NOT OpenSSL_FOUND)
+    message(FATAL_ERROR "OpenSSL is required for HTTPS support.")
+endif()
 
 if(NOT TARGET pjsip)
     message(FATAL_ERROR "PJSIP is required. Ensure SIPGATEWAY_BUILD_PJSIP is enabled.")
@@ -32,6 +35,7 @@ add_executable(sip_gateway
     src/audio/player.cpp
     src/audio/recorder.cpp
     src/utils/async.cpp
+    src/utils/http.cpp
     src/sip/app.cpp
     src/sip/account.cpp
     src/sip/call.cpp
@@ -48,6 +52,7 @@ add_executable(sip_gateway
     include/sip_gateway/audio/player.hpp
     include/sip_gateway/audio/recorder.hpp
     include/sip_gateway/utils/async.hpp
+    include/sip_gateway/utils/http.hpp
     include/sip_gateway/sip/app.hpp
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
@@ -71,10 +76,8 @@ endif()
 if(TARGET httplib::httplib)
     target_link_libraries(sip_gateway PRIVATE httplib::httplib)
 endif()
-if(OpenSSL_FOUND)
-    target_link_libraries(sip_gateway PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    target_compile_definitions(sip_gateway PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-endif()
+target_link_libraries(sip_gateway PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+target_compile_definitions(sip_gateway PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 if(TARGET websocketpp)
     target_link_libraries(sip_gateway PRIVATE websocketpp)
 endif()
@@ -91,6 +94,18 @@ if(TARGET pjproject)
 endif()
 if(TARGET pjsip-ready)
     add_dependencies(sip_gateway pjsip-ready)
+endif()
+if(DEFINED SIPGATEWAY_PJSIP_INCLUDE_DIR)
+    add_custom_target(pjsip-config-site
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SIPGATEWAY_PJSIP_INCLUDE_DIR}/pj
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/cmake/pjsip_config_site.h
+            ${SIPGATEWAY_PJSIP_INCLUDE_DIR}/pj/config_site.h
+    )
+    if(TARGET pjsip-ready)
+        add_dependencies(pjsip-config-site pjsip-ready)
+    endif()
+    add_dependencies(sip_gateway pjsip-config-site)
 endif()
 if(DEFINED SIPGATEWAY_PJSIP_LIB_NAMES_CSV AND SIPGATEWAY_PJSIP_LIB_DIR)
     add_custom_command(TARGET sip_gateway PRE_LINK

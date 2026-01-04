@@ -57,12 +57,8 @@ BackendClient::BackendClient(std::string base_url,
     parse_url(base_url, scheme_, host_, port_, base_path_);
 
     if (scheme_ == "https") {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         client_https_ = std::make_unique<httplib::SSLClient>(host_, port_);
         client_https_->enable_server_certificate_verification(false);
-#else
-        throw BackendError("HTTPS backend requires CPPHTTPLIB_OPENSSL_SUPPORT");
-#endif
     } else {
         client_http_ = std::make_unique<httplib::Client>(host_, port_);
     }

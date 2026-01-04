@@ -2,5 +2,6 @@
 #define SIP_GATEWAY_PJSIP_CONFIG_SITE_H
 
 #define PJSUA_MAX_CALLS 64
+#define PJ_HAS_LIMITS_H 1
 
 #endif
