@@ -33,6 +33,8 @@ add_executable(sip_gateway
     src/audio/recorder.cpp
     src/utils/async.cpp
     src/sip/app.cpp
+    src/sip/account.cpp
+    src/sip/call.cpp
     include/sip_gateway/config.hpp
     include/sip_gateway/logging.hpp
     include/sip_gateway/backend/client.hpp
@@ -42,6 +44,8 @@ add_executable(sip_gateway
     include/sip_gateway/audio/recorder.hpp
     include/sip_gateway/utils/async.hpp
     include/sip_gateway/sip/app.hpp
+    include/sip_gateway/sip/account.hpp
+    include/sip_gateway/sip/call.hpp
 )
 
 target_compile_features(sip_gateway PRIVATE cxx_std_17)

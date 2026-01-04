@@ -36,6 +36,9 @@ public:
 
     nlohmann::json get_json(const std::string& path);
     nlohmann::json post_json(const std::string& path, const nlohmann::json& body);
+    nlohmann::json post_multipart_json(const std::string& path,
+                                       const std::string& field_name,
+                                       const nlohmann::json& body);
     nlohmann::json put_json(const std::string& path, const nlohmann::json& body);
     nlohmann::json delete_json(const std::string& path);
     nlohmann::json post_binary(const std::string& path,

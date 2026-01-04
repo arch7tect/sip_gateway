@@ -110,6 +110,30 @@ nlohmann::json BackendClient::post_json(const std::string& path, const nlohmann:
     return nlohmann::json::parse(response->body);
 }
 
+nlohmann::json BackendClient::post_multipart_json(const std::string& path,
+                                                  const std::string& field_name,
+                                                  const nlohmann::json& body) {
+    auto headers = httplib::Headers{{"Accept", "application/json"}};
+    if (authorization_token_) {
+        headers.emplace("Authorization", "Bearer " + *authorization_token_);
+    }
+    httplib::MultipartFormDataItems items;
+    items.push_back({field_name, body.dump(), "", "application/json"});
+    auto response = client_https_
+                        ? client_https_->Post(build_path(path).c_str(), headers, items)
+                        : client_http_->Post(build_path(path).c_str(), headers, items);
+    if (!response) {
+        throw BackendError("Backend request failed");
+    }
+    if (response->status == 403) {
+        throw BackendPermissionError(response->body);
+    }
+    if (response->status < 200 || response->status >= 300) {
+        throw BackendError(response->body);
+    }
+    return nlohmann::json::parse(response->body);
+}
+
 nlohmann::json BackendClient::put_json(const std::string& path, const nlohmann::json& body) {
     auto headers = httplib::Headers{{"Content-Type", "application/json"},
                                     {"Accept", "application/json"}};
