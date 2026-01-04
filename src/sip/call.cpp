@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <thread>
 #include <cctype>
@@ -84,6 +85,12 @@ void SipCall::set_greeting(std::optional<std::string> greeting) {
 void SipCall::handle_ws_message(const nlohmann::json& message) {
     const auto type = message.value("type", "");
     if (type == "message") {
+        if (!app_.config().is_streaming) {
+            logging::debug(
+                "WebSocket message ignored (streaming disabled)",
+                {kv("session_id", session_id_.value_or(""))});
+            return;
+        }
         std::optional<std::chrono::steady_clock::time_point> reply_start;
         {
             std::lock_guard<std::mutex> lock(generation_mutex_);
@@ -103,15 +110,10 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
                     {kv("session_id", session_id_.value_or(""))});
                 return;
             }
-            if (state_ == CallState::SpeculativeGenerate) {
-                logging::debug(
-                    "TTS queued from websocket (speculative)",
-                    {kv("text", text),
-                     kv("queue_size", static_cast<int>(pending_tts_.size() + 1)),
-                     kv("session_id", session_id_.value_or(""))});
-                pending_tts_.push_back(text);
-                return;
-            }
+            logging::debug(
+                "TTS queued from websocket (streaming)",
+                {kv("text", text),
+                 kv("session_id", session_id_.value_or(""))});
             enqueue_tts_text(text);
         }
         return;
@@ -121,12 +123,8 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
             "WebSocket end of stream",
             {kv("session_id", session_id_.value_or(""))});
         if (state_ == CallState::Finished) {
-            play_pending_tts();
             handle_playback_finished();
             return;
-        }
-        if (state_ == CallState::CommitGenerate || state_ == CallState::WaitForUser) {
-            play_pending_tts();
         }
         return;
     }
@@ -137,7 +135,6 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         if (app_.config().sip_early_eoc && state_ != CallState::SpeculativeGenerate) {
             finished_ = true;
             set_state(CallState::Finished);
-            play_pending_tts();
             handle_playback_finished();
         }
         return;
@@ -359,13 +356,14 @@ void SipCall::open_media() {
     if (greeting_ && !greeting_->empty()) {
         enqueue_tts_text(*greeting_, app_.config().greeting_delay_sec);
     }
-    play_pending_tts();
+    try_play_tts();
 }
 
 void SipCall::close_media() {
     if (!media_active_) {
         return;
     }
+    cancel_tts_queue();
     if (player_) {
         player_->interrupt();
     }
@@ -420,7 +418,7 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
     if (player_) {
         player_->interrupt();
     }
-    clear_pending_tts();
+    cancel_tts_queue();
     if (vad_processor_) {
         vad_processor_->cancel_user_salience();
     }
@@ -677,7 +675,7 @@ void SipCall::start_session_text(const std::string& text) {
     if (text.empty()) {
         return;
     }
-    clear_pending_tts();
+    cancel_tts_queue();
     if (player_) {
         player_->interrupt();
     }
@@ -719,7 +717,6 @@ void SipCall::commit_session() {
         if (!finished_) {
             set_state(CallState::WaitForUser);
         }
-        play_pending_tts();
         if (finished_) {
             handle_playback_finished();
         }
@@ -760,7 +757,7 @@ void SipCall::handle_playback_finished() {
     if (player_ && player_->is_active()) {
         return;
     }
-    if (!pending_tts_.empty()) {
+    if (has_tts_queue()) {
         return;
     }
     schedule_soft_hangup();
@@ -774,8 +771,8 @@ bool SipCall::ai_can_speak() const {
 
 bool SipCall::is_active_ai_speech() const {
     const bool player_active = player_ && player_->is_active();
-    const bool has_pending = !pending_tts_.empty() && ai_can_speak();
-    return player_active || has_pending || commit_in_flight_;
+    const bool has_queued = has_tts_queue() && ai_can_speak();
+    return player_active || has_queued || commit_in_flight_;
 }
 
 bool SipCall::is_same_unstable_text(const std::string& text) const {
@@ -800,7 +797,7 @@ void SipCall::schedule_soft_hangup() {
         if (player_ && player_->is_active()) {
             return;
         }
-        if (!pending_tts_.empty()) {
+        if (has_tts_queue()) {
             return;
         }
         if (start_transfer()) {
@@ -866,8 +863,14 @@ bool SipCall::start_transfer() {
     return true;
 }
 
-void SipCall::clear_pending_tts() {
-    pending_tts_.clear();
+void SipCall::cancel_tts_queue() {
+    std::lock_guard<std::mutex> lock(tts_mutex_);
+    for (auto& task : tts_queue_) {
+        if (task.canceled) {
+            task.canceled->store(true);
+        }
+    }
+    tts_queue_.clear();
 }
 
 void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
@@ -882,89 +885,131 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         });
         return;
     }
-    if (!media_active_ || !player_) {
-        logging::debug(
-            "TTS queued (media inactive)",
-            {kv("text", sanitized),
-             kv("queue_size", static_cast<int>(pending_tts_.size() + 1)),
-             kv("session_id", session_id_.value_or(""))});
-        pending_tts_.push_back(sanitized);
-        return;
-    }
     if (!session_id_) {
         logging::warn(
             "TTS skipped: session_id missing",
             {kv("text", sanitized)});
         return;
     }
-    try {
-        std::optional<std::chrono::steady_clock::time_point> response_start;
+    logging::debug(
+        "TTS queued for synthesis",
+        {kv("text", sanitized),
+         kv("session_id", session_id_.value_or(""))});
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    auto task_ptr = std::make_shared<
+        std::packaged_task<std::optional<std::filesystem::path>()>>(
+        [this, sanitized, canceled]() -> std::optional<std::filesystem::path> {
+            if (canceled->load()) {
+                return std::nullopt;
+            }
+            std::optional<std::chrono::steady_clock::time_point> response_start;
+            {
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                response_start = start_response_generation_;
+            }
+            try {
+                const auto synth_start = std::chrono::steady_clock::now();
+                const auto blob = app_.synthesize_session_audio(*session_id_, sanitized);
+                const auto synth_elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - synth_start).count();
+                if (response_start) {
+                    Metrics::instance().observe_response_time("synthesize", synth_elapsed);
+                }
+                if (canceled->load()) {
+                    return std::nullopt;
+                }
+                if (blob.size() < 364) {
+                    logging::info(
+                        "TTS audio too short",
+                        {kv("blob_size", static_cast<int>(blob.size())),
+                         kv("session_id", session_id_.value_or(""))});
+                    return std::nullopt;
+                }
+                if (response_start) {
+                    const auto response_elapsed = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - *response_start).count();
+                    Metrics::instance().observe_response_time("play_queue", response_elapsed);
+                    Metrics::instance().observe_response_summary("play_queue", response_elapsed);
+                    logging::debug(
+                        "Response ready",
+                        {kv("elapsed_sec", response_elapsed),
+                         kv("session_id", session_id_.value_or(""))});
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    start_response_generation_.reset();
+                }
+                const auto filename = make_tts_path();
+                std::error_code ec;
+                std::filesystem::create_directories(filename.parent_path(), ec);
+                std::ofstream out(filename, std::ios::binary);
+                out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+                out.close();
+                return filename;
+            } catch (const std::exception& ex) {
+                logging::error(
+                    "TTS synthesize failed",
+                    {kv("error", ex.what()),
+                     kv("session_id", session_id_.value_or(""))});
+                return std::nullopt;
+            }
+        });
+    auto future = task_ptr->get_future().share();
+    {
+        std::lock_guard<std::mutex> lock(tts_mutex_);
+        tts_queue_.push_back({sanitized, future, canceled});
+    }
+    utils::run_async([this, task_ptr]() {
+        (*task_ptr)();
+        try_play_tts();
+    });
+    try_play_tts();
+}
+
+void SipCall::try_play_tts() {
+    if (!media_active_ || !player_) {
+        return;
+    }
+    while (true) {
+        TtsTask task;
         {
-            std::lock_guard<std::mutex> lock(generation_mutex_);
-            response_start = start_response_generation_;
+            std::lock_guard<std::mutex> lock(tts_mutex_);
+            if (tts_queue_.empty()) {
+                return;
+            }
+            auto& front = tts_queue_.front();
+            if (front.future.wait_for(std::chrono::seconds(0)) !=
+                std::future_status::ready) {
+                return;
+            }
+            task = front;
+            tts_queue_.pop_front();
         }
-        logging::debug(
-            "TTS sending to SIP",
-            {kv("text", sanitized),
-             kv("session_id", session_id_.value_or(""))});
-        const auto synth_start = std::chrono::steady_clock::now();
-        const auto blob = app_.synthesize_session_audio(*session_id_, sanitized);
-        const auto synth_elapsed = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - synth_start).count();
-        if (response_start) {
-            Metrics::instance().observe_response_time("synthesize", synth_elapsed);
+        if (task.canceled && task.canceled->load()) {
+            continue;
         }
-        if (blob.size() < 364) {
-            logging::info(
-                "TTS audio too short",
-                {kv("blob_size", static_cast<int>(blob.size())),
-                 kv("session_id", *session_id_)});
-            return;
-        }
-        if (response_start) {
-            const auto response_elapsed = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - *response_start).count();
-            Metrics::instance().observe_response_time("play_queue", response_elapsed);
-            Metrics::instance().observe_response_summary("play_queue", response_elapsed);
-            logging::debug(
-                "Response ready",
-                {kv("elapsed_sec", response_elapsed),
+        std::optional<std::filesystem::path> audio_path;
+        try {
+            audio_path = task.future.get();
+        } catch (const std::exception& ex) {
+            logging::error(
+                "TTS playback failed",
+                {kv("error", ex.what()),
                  kv("session_id", session_id_.value_or(""))});
-            std::lock_guard<std::mutex> lock(generation_mutex_);
-            start_response_generation_.reset();
+            continue;
         }
-        const auto filename = make_tts_path();
-        std::error_code ec;
-        std::filesystem::create_directories(filename.parent_path(), ec);
-        std::ofstream out(filename, std::ios::binary);
-        out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
-        out.close();
-        player_->enqueue(filename, true);
+        if (!audio_path || audio_path->empty()) {
+            continue;
+        }
+        player_->enqueue(*audio_path, true);
         player_->play();
         if (vad_processor_) {
             vad_processor_->reset_user_salience();
         }
-    } catch (const std::exception& ex) {
-        logging::error(
-            "TTS synthesize failed",
-            {kv("error", ex.what()),
-             kv("session_id", session_id_.value_or(""))});
     }
 }
 
-void SipCall::play_pending_tts() {
-    if (pending_tts_.empty()) {
-        return;
-    }
-    logging::debug(
-        "TTS playing pending queue",
-        {kv("count", static_cast<int>(pending_tts_.size())),
-         kv("session_id", session_id_.value_or(""))});
-    auto pending = std::move(pending_tts_);
-    pending_tts_.clear();
-    for (const auto& text : pending) {
-        enqueue_tts_text(text);
-    }
+bool SipCall::has_tts_queue() const {
+    std::lock_guard<std::mutex> lock(tts_mutex_);
+    return !tts_queue_.empty();
 }
 
 void SipCall::set_state(CallState state) {

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
+#include <deque>
 #include <filesystem>
+#include <future>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -59,6 +62,12 @@ public:
     void onCallTransferStatus(pj::OnCallTransferStatusParam& prm) override;
 
 private:
+    struct TtsTask {
+        std::string text;
+        std::shared_future<std::optional<std::filesystem::path>> future;
+        std::shared_ptr<std::atomic<bool>> canceled;
+    };
+
     void open_media();
     void close_media();
     void set_state(CallState state);
@@ -78,10 +87,11 @@ private:
     void schedule_soft_hangup();
     bool ai_can_speak() const;
     bool is_active_ai_speech() const;
+    bool has_tts_queue() const;
     bool is_same_unstable_text(const std::string& text) const;
-    void clear_pending_tts();
+    void cancel_tts_queue();
     void enqueue_tts_text(const std::string& text, double delay_sec = 0.0);
-    void play_pending_tts();
+    void try_play_tts();
     std::filesystem::path make_tts_path() const;
     std::string recording_basename() const;
 
@@ -105,7 +115,8 @@ private:
     std::unique_ptr<audio::AudioMediaPort> media_port_;
     std::unique_ptr<audio::CallRecorder> recorder_;
     std::unique_ptr<audio::SmartPlayer> player_;
-    std::vector<std::string> pending_tts_;
+    std::deque<TtsTask> tts_queue_;
+    mutable std::mutex tts_mutex_;
     std::unique_ptr<vad::StreamingVadProcessor> vad_processor_;
     std::mutex generation_mutex_;
     bool start_in_flight_ = false;

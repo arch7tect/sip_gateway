@@ -13,7 +13,8 @@ int main() {
             "Starting sip-gateway",
             {sip_gateway::kv("backend_url", config.backend_url),
              sip_gateway::kv("rest_port", config.sip_rest_api_port),
-             sip_gateway::kv("main_thread_only", config.ua_main_thread_only)});
+             sip_gateway::kv("main_thread_only", config.ua_main_thread_only),
+             sip_gateway::kv("interruptions_allowed", config.interruptions_are_allowed)});
         sip_gateway::SipApp app(config);
         app.init();
         app.run();
