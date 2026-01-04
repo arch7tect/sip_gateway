@@ -292,6 +292,10 @@ std::string SipApp::transcribe_audio(const std::string& wav_bytes) {
 
 nlohmann::json SipApp::start_session_text(const std::string& session_id,
                                           const std::string& text) {
+    logging::debug(
+        "Backend start sent",
+        {kv("session_id", session_id),
+         kv("text", text)});
     nlohmann::json payload;
     payload["message"] = text;
     payload["kwargs"] = nlohmann::json::object();
@@ -299,11 +303,17 @@ nlohmann::json SipApp::start_session_text(const std::string& session_id,
 }
 
 nlohmann::json SipApp::commit_session(const std::string& session_id) {
+    logging::debug(
+        "Backend commit sent",
+        {kv("session_id", session_id)});
     nlohmann::json payload = nlohmann::json::object();
     return backend_client_.post_json("/session/" + session_id + "/commit", payload);
 }
 
 nlohmann::json SipApp::rollback_session(const std::string& session_id) {
+    logging::debug(
+        "Backend rollback sent",
+        {kv("session_id", session_id)});
     nlohmann::json payload = nlohmann::json::object();
     return backend_client_.post_json("/session/" + session_id + "/rollback", payload);
 }
@@ -535,6 +545,7 @@ void SipApp::init_pjsip() {
         PJMEDIA_ECHO_USE_NOISE_SUPPRESSOR);
     ep_cfg.medConfig.sndAutoCloseTime = -1;
     ep_cfg.logConfig.level = config_.pjsip_log_level;
+    ep_cfg.logConfig.consoleLevel = config_.pjsip_console_log_level;
     if (config_.log_filename) {
         ep_cfg.logConfig.filename = *config_.log_filename;
     }

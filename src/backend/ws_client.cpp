@@ -1,5 +1,7 @@
 #include "sip_gateway/backend/ws_client.hpp"
 
+#include "sip_gateway/utils/async.hpp"
+
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -82,6 +84,7 @@ void BackendWsClient::stop() {
 }
 
 void BackendWsClient::run_loop() {
+    utils::ensure_pj_thread_registered("sipgw_ws");
     while (running_) {
         auto client = std::make_shared<WsClient>();
         client->clear_access_channels(websocketpp::log::alevel::all);
@@ -90,6 +93,7 @@ void BackendWsClient::run_loop() {
 
         client->set_message_handler([this](websocketpp::connection_hdl,
                                            WsClient::message_ptr msg) {
+            utils::ensure_pj_thread_registered("sipgw_ws");
             try {
                 auto payload = nlohmann::json::parse(msg->get_payload());
                 const auto type = payload.value("type", "");
@@ -108,11 +112,13 @@ void BackendWsClient::run_loop() {
             }
         });
         client->set_close_handler([this](websocketpp::connection_hdl) {
+            utils::ensure_pj_thread_registered("sipgw_ws");
             if (on_close_) {
                 on_close_();
             }
         });
         client->set_fail_handler([this](websocketpp::connection_hdl) {
+            utils::ensure_pj_thread_registered("sipgw_ws");
             if (on_close_) {
                 on_close_();
             }

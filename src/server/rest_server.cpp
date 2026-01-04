@@ -1,6 +1,7 @@
 #include "sip_gateway/server/rest_server.hpp"
 
 #include "sip_gateway/logging.hpp"
+#include "sip_gateway/utils/async.hpp"
 
 namespace sip_gateway {
 
@@ -23,6 +24,7 @@ void RestServer::start() {
     });
 
     server_->Post("/call", [this](const httplib::Request& req, httplib::Response& res) {
+        utils::ensure_pj_thread_registered("sipgw_rest");
         if (!authorize_request(req, res)) {
             return;
         }
@@ -51,6 +53,7 @@ void RestServer::start() {
 
     server_->Post(R"(/transfer/([A-Za-z0-9_-]+))",
                   [this](const httplib::Request& req, httplib::Response& res) {
+        utils::ensure_pj_thread_registered("sipgw_rest");
         if (!authorize_request(req, res)) {
             return;
         }

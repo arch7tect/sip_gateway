@@ -6,13 +6,18 @@
 namespace sip_gateway {
 namespace utils {
 
+void ensure_pj_thread_registered(const char* name) {
+    if (pj_thread_is_registered()) {
+        return;
+    }
+    thread_local pj_thread_desc desc;
+    pj_thread_t* thread = nullptr;
+    pj_thread_register(name ? name : "sipgw", desc, &thread);
+}
+
 void run_async(std::function<void()> task) {
     std::thread worker([task = std::move(task)]() mutable {
-        if (!pj_thread_is_registered()) {
-            thread_local pj_thread_desc desc;
-            pj_thread_t* thread = nullptr;
-            pj_thread_register("sipgw_async", desc, &thread);
-        }
+        ensure_pj_thread_registered("sipgw_async");
         task();
     });
     worker.detach();

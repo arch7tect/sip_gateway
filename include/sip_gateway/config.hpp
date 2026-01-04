@@ -37,6 +37,7 @@ struct Config {
     std::optional<std::string> log_filename;
     std::optional<std::filesystem::path> logs_dir;
     int pjsip_log_level = 1;
+    int pjsip_console_log_level = 1;
     int vad_sampling_rate = 16000;
     double vad_threshold = 0.65;
     int vad_min_speech_duration_ms = 150;

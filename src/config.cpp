@@ -223,6 +223,9 @@ Config Config::load() {
     }
 
     config.pjsip_log_level = get_env_int("PJSIP_LOG_LEVEL", 1);
+    const int default_console_level = config.log_filename ? 0 : config.pjsip_log_level;
+    config.pjsip_console_log_level =
+        get_env_int("PJSIP_CONSOLE_LOG_LEVEL", default_console_level);
 
     config.vad_sampling_rate = get_env_int("VAD_SAMPLING_RATE", 16000);
     config.vad_threshold = get_env_double("VAD_THRESHOLD", 0.65);

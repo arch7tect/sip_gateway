@@ -91,6 +91,11 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
                 return;
             }
             if (state_ == CallState::SpeculativeGenerate) {
+                logging::debug(
+                    "TTS queued from websocket (speculative)",
+                    {kv("text", text),
+                     kv("queue_size", static_cast<int>(pending_tts_.size() + 1)),
+                     kv("session_id", session_id_.value_or(""))});
                 pending_tts_.push_back(text);
                 return;
             }
@@ -622,9 +627,14 @@ void SipCall::commit_session() {
     }
     try {
         auto response = app_.commit_session(*session_id_);
-        if (response.contains("response") && response["response"].is_string()) {
+        if (!app_.config().is_streaming &&
+            response.contains("response") && response["response"].is_string()) {
             const auto text = response["response"].get<std::string>();
             if (!text.empty()) {
+                logging::debug(
+                    "TTS queued from commit response",
+                    {kv("text", text),
+                     kv("session_id", session_id_.value_or(""))});
                 enqueue_tts_text(text);
             }
         }
@@ -824,6 +834,11 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         return;
     }
     if (!media_active_ || !player_) {
+        logging::debug(
+            "TTS queued (media inactive)",
+            {kv("text", text),
+             kv("queue_size", static_cast<int>(pending_tts_.size() + 1)),
+             kv("session_id", session_id_.value_or(""))});
         pending_tts_.push_back(text);
         return;
     }
@@ -834,6 +849,10 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         return;
     }
     try {
+        logging::debug(
+            "TTS sending to SIP",
+            {kv("text", text),
+             kv("session_id", session_id_.value_or(""))});
         const auto blob = app_.synthesize_session_audio(*session_id_, text);
         if (blob.size() < 364) {
             logging::info(
@@ -865,6 +884,10 @@ void SipCall::play_pending_tts() {
     if (pending_tts_.empty()) {
         return;
     }
+    logging::debug(
+        "TTS playing pending queue",
+        {kv("count", static_cast<int>(pending_tts_.size())),
+         kv("session_id", session_id_.value_or(""))});
     auto pending = std::move(pending_tts_);
     pending_tts_.clear();
     for (const auto& text : pending) {
