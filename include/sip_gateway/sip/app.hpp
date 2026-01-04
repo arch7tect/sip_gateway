@@ -38,6 +38,8 @@ public:
                                       const std::string& text);
     nlohmann::json commit_session(const std::string& session_id);
     nlohmann::json rollback_session(const std::string& session_id);
+    void close_session(const std::string& session_id,
+                       const std::optional<std::string>& status);
     std::shared_ptr<vad::VadModel> vad_model() const;
 
 private:

@@ -163,6 +163,43 @@ void SipCall::onCallState(pj::OnCallStateParam& prm) {
         }
         if (info.state == PJSIP_INV_STATE_DISCONNECTED) {
             close_media();
+            std::optional<std::string> status = close_status_;
+            if (!status) {
+                const auto code = info.lastStatusCode;
+                if (code == PJSIP_SC_DECLINE) {
+                    status = "declined";
+                } else if (code == PJSIP_SC_BUSY_HERE) {
+                    status = "busy";
+                } else if (code == PJSIP_SC_REQUEST_TERMINATED) {
+                    status = "canceled";
+                } else if (code == PJSIP_SC_TEMPORARILY_UNAVAILABLE ||
+                           code == PJSIP_SC_REQUEST_TIMEOUT) {
+                    status = "noanswer";
+                } else if (code == PJSIP_SC_NOT_FOUND) {
+                    status = "not_found";
+                } else if (code == PJSIP_SC_SERVICE_UNAVAILABLE ||
+                           code == PJSIP_SC_SERVER_TIMEOUT) {
+                    status = "network_error";
+                } else if (code == PJSIP_SC_OK) {
+                    status = "completed";
+                } else {
+                    status = "unknown";
+                }
+            }
+            if (session_id_) {
+                const auto session_id = *session_id_;
+                utils::run_async([this, session_id, status]() {
+                    try {
+                        app_.close_session(session_id, status);
+                    } catch (const std::exception& ex) {
+                        logging::error(
+                            "Backend close failed",
+                            {kv("error", ex.what()),
+                             kv("session_id", session_id),
+                             kv("status", status.value_or(""))});
+                    }
+                });
+            }
             app_.handle_call_disconnected(getId());
         }
     } catch (const std::exception& ex) {
@@ -780,6 +817,7 @@ bool SipCall::start_transfer() {
         {kv("to_uri", target),
          kv("delay_sec", delay_sec),
          kv("session_id", session_id_.value_or(""))});
+    close_status_ = "transferred";
 
     if (target.rfind("dtmf:", 0) == 0) {
         const auto digits = target.substr(5);

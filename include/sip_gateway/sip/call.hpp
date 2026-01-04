@@ -93,6 +93,7 @@ private:
     std::optional<std::string> transfer_target_;
     double transfer_delay_sec_ = 1.0;
     bool transfer_started_ = false;
+    std::optional<std::string> close_status_;
     std::mutex transfer_mutex_;
     bool media_active_ = false;
     bool user_speaking_ = false;

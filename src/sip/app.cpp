@@ -318,6 +318,22 @@ nlohmann::json SipApp::rollback_session(const std::string& session_id) {
     return backend_client_.post_json("/session/" + session_id + "/rollback", payload);
 }
 
+void SipApp::close_session(const std::string& session_id,
+                           const std::optional<std::string>& status) {
+    if (session_id.empty()) {
+        return;
+    }
+    std::string path = "/session/" + session_id;
+    if (status && !status->empty()) {
+        path += "?status=" + url_encode(*status);
+    }
+    logging::debug(
+        "Backend close sent",
+        {kv("session_id", session_id),
+         kv("status", status.value_or(""))});
+    backend_client_.delete_json(path);
+}
+
 std::shared_ptr<vad::VadModel> SipApp::vad_model() const {
     return vad_model_;
 }
