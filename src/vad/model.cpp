@@ -4,14 +4,10 @@
 #include <array>
 #include <stdexcept>
 
-#ifdef SIPGATEWAY_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
-#endif
 
 namespace sip_gateway {
 namespace vad {
-
-#ifdef SIPGATEWAY_HAS_ONNX
 
 namespace {
 
@@ -168,35 +164,6 @@ float VadModel::get_speech_prob(const std::vector<float>& audio,
 
     return prob;
 }
-
-#else
-
-struct VadModel::Impl {
-    explicit Impl(int sampling_rate_in) : sampling_rate(sampling_rate_in) {}
-    int sampling_rate;
-};
-
-VadModel::VadModel(const std::filesystem::path&, int sampling_rate)
-    : impl_(std::make_unique<Impl>(sampling_rate)) {
-    throw std::runtime_error("ONNX Runtime not enabled");
-}
-
-VadModel::~VadModel() = default;
-
-int VadModel::sampling_rate() const {
-    return impl_->sampling_rate;
-}
-
-std::vector<float> VadModel::initialize_state() const {
-    return {};
-}
-
-float VadModel::get_speech_prob(const std::vector<float>&,
-                                std::vector<float>*) const {
-    return 0.0f;
-}
-
-#endif
 
 }
 }
