@@ -314,18 +314,23 @@ void StreamingVadProcessor::fire_user_silence_timeout() {
 
 std::vector<float> StreamingVadProcessor::apply_fade(const std::vector<float>& audio,
                                                      bool fade_in) const {
-    if (audio.size() <= 1) {
-        return audio;
-    }
-    std::vector<float> result = audio;
+    std::vector<float> result;
     const size_t length = audio.size();
+    if (length == 0) {
+        return result;
+    }
+    result.reserve(length);
+    if (length == 1) {
+        result.push_back(audio.front());
+        return result;
+    }
     for (size_t i = 0; i < length; ++i) {
         const float ratio = static_cast<float>(i) / static_cast<float>(length - 1);
         float curve = std::sin(ratio * 1.57079632679f);
         if (!fade_in) {
             curve = 1.0f - curve;
         }
-        result[i] *= curve;
+        result.push_back(audio[i] * curve);
     }
     return result;
 }

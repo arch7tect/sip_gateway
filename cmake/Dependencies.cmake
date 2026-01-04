@@ -128,6 +128,8 @@ if(SIPGATEWAY_BUILD_PJSIP)
         libyuv
         libwebrtc
     )
+    string(REPLACE ";" "," _SIPGATEWAY_PJSIP_LIB_NAMES_CSV "${_SIPGATEWAY_PJSIP_LIB_NAMES}")
+    set(SIPGATEWAY_PJSIP_LIB_NAMES_CSV "${_SIPGATEWAY_PJSIP_LIB_NAMES_CSV}" CACHE INTERNAL "")
     set(SIPGATEWAY_PJSIP_LINK_NAMES "")
     foreach(_lib_name IN LISTS _SIPGATEWAY_PJSIP_LIB_NAMES)
         string(REGEX REPLACE "^lib" "" _link_name "${_lib_name}")
@@ -164,8 +166,12 @@ if(SIPGATEWAY_BUILD_PJSIP)
         INSTALL_COMMAND
             make install
             COMMAND ${CMAKE_COMMAND}
+                -E copy_if_different
+                ${CMAKE_CURRENT_LIST_DIR}/pjsip_config_site.h
+                <INSTALL_DIR>/include/pj/config_site.h
+            COMMAND ${CMAKE_COMMAND}
                 -D LIB_DIR=<INSTALL_DIR>/lib
-                -D LIBS="${_SIPGATEWAY_PJSIP_LIB_NAMES}"
+                -D LIBS=${_SIPGATEWAY_PJSIP_LIB_NAMES_CSV}
                 -P ${CMAKE_CURRENT_LIST_DIR}/pjsip_symlinks.cmake
         BUILD_IN_SOURCE 1
         INSTALL_DIR ${SIPGATEWAY_DEPS_PREFIX}/pjproject
@@ -181,6 +187,7 @@ if(SIPGATEWAY_BUILD_PJSIP)
         ALWAYS TRUE
     )
     ExternalProject_Add_StepTargets(pjproject ensure_install)
+    add_custom_target(pjsip-ready DEPENDS pjproject-install pjproject-ensure_install)
 
     set(SIPGATEWAY_PJSIP_PREFIX ${SIPGATEWAY_DEPS_PREFIX}/pjproject CACHE PATH "")
     set(SIPGATEWAY_PJSIP_INCLUDE_DIR ${SIPGATEWAY_PJSIP_PREFIX}/include CACHE PATH "")

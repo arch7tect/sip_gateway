@@ -89,6 +89,17 @@ if(TARGET pjproject)
         add_dependencies(sip_gateway pjproject-install)
     endif()
 endif()
+if(TARGET pjsip-ready)
+    add_dependencies(sip_gateway pjsip-ready)
+endif()
+if(DEFINED SIPGATEWAY_PJSIP_LIB_NAMES_CSV AND SIPGATEWAY_PJSIP_LIB_DIR)
+    add_custom_command(TARGET sip_gateway PRE_LINK
+        COMMAND ${CMAKE_COMMAND}
+            -D LIB_DIR=${SIPGATEWAY_PJSIP_LIB_DIR}
+            -D LIBS=${SIPGATEWAY_PJSIP_LIB_NAMES_CSV}
+            -P ${CMAKE_SOURCE_DIR}/cmake/pjsip_symlinks.cmake
+    )
+endif()
 
 if(SIPGATEWAY_FETCH_DEPS)
     FetchContent_GetProperties(spdlog)
