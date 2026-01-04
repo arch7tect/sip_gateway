@@ -230,7 +230,11 @@ void SipCall::open_media() {
                 app_.config().short_pause_offset_ms,
                 app_.config().long_pause_offset_ms,
                 app_.config().user_silence_timeout_ms,
-                app_.config().vad_speech_prob_window);
+                app_.config().vad_speech_prob_window,
+                app_.config().vad_use_dynamic_corrections,
+                app_.config().vad_correction_debug,
+                app_.config().vad_correction_enter_thres,
+                app_.config().vad_correction_exit_thres);
             vad_processor_->set_on_speech_start(
                 [this](const std::vector<float>& audio, double start, double duration) {
                     on_vad_speech_start(audio, start, duration);
@@ -313,6 +317,9 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
         player_->interrupt();
     }
     clear_pending_tts();
+    if (vad_processor_) {
+        vad_processor_->cancel_user_salience();
+    }
     set_state(CallState::WaitForUser);
 
     utils::run_async([this]() {
@@ -570,6 +577,9 @@ void SipCall::rollback_session() {
 
 void SipCall::handle_playback_finished() {
     if (!finished_) {
+        if (vad_processor_) {
+            vad_processor_->start_user_silence();
+        }
         return;
     }
     if (player_ && player_->is_active()) {
@@ -623,6 +633,9 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         out.close();
         player_->enqueue(filename, true);
         player_->play();
+        if (vad_processor_) {
+            vad_processor_->reset_user_salience();
+        }
     } catch (const std::exception& ex) {
         logging::get_logger()->error(with_kv(
             "TTS synthesize failed",

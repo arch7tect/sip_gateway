@@ -18,7 +18,11 @@ StreamingVadProcessor::StreamingVadProcessor(std::shared_ptr<VadModel> model,
                                              int short_pause_ms,
                                              int long_pause_ms,
                                              int user_silence_duration_ms,
-                                             int speech_prob_window)
+                                             int speech_prob_window,
+                                             bool use_dynamic_corrections,
+                                             bool correction_debug,
+                                             double correction_enter_thres,
+                                             double correction_exit_thres)
     : model_(std::move(model)),
       threshold_(threshold),
       sampling_rate_(model_ ? model_->sampling_rate() : 16000),
@@ -33,6 +37,14 @@ StreamingVadProcessor::StreamingVadProcessor(std::shared_ptr<VadModel> model,
     max_silence_samples_ = sampling_rate_ * max_silence_ms / 1000;
     if (model_) {
         state_ = model_->initialize_state();
+    }
+    use_dynamic_corrections_ = use_dynamic_corrections;
+    if (use_dynamic_corrections_) {
+        VADCorrectionConfig cfg;
+        cfg.debug = correction_debug;
+        cfg.enter_thres = correction_enter_thres;
+        cfg.exit_thres = correction_exit_thres;
+        correction_ = std::make_unique<DynamicCorrection>(cfg);
     }
 }
 
@@ -81,6 +93,23 @@ void StreamingVadProcessor::finalize() {
     }
 }
 
+void StreamingVadProcessor::start_user_silence() {
+    user_silence_start_ = current_sample_;
+    user_silence_timeout_fired_ = false;
+    if (correction_) {
+        correction_->start_early_detection();
+    }
+}
+
+void StreamingVadProcessor::reset_user_salience() {
+    user_silence_start_ = 0;
+    user_silence_timeout_fired_ = true;
+}
+
+void StreamingVadProcessor::cancel_user_salience() {
+    user_silence_start_ = 0;
+}
+
 float StreamingVadProcessor::get_smoothed_prob(const std::vector<float>& window) {
     std::vector<float> normalized = window;
     float max_amp = 0.0f;
@@ -115,7 +144,15 @@ float StreamingVadProcessor::get_smoothed_prob(const std::vector<float>& window)
 
 void StreamingVadProcessor::process_window(const std::vector<float>& window) {
     const float speech_prob = get_smoothed_prob(window);
-    const bool is_speech_frame = speech_prob > threshold_;
+    bool is_speech_frame = speech_prob > threshold_;
+    if (use_dynamic_corrections_ && correction_) {
+        double energy_acc = 0.0;
+        for (float value : window) {
+            energy_acc += static_cast<double>(value * value);
+        }
+        const double frame_energy = std::sqrt(energy_acc / window.size());
+        is_speech_frame = correction_->process_frame(speech_prob, frame_energy);
+    }
     current_sample_ += static_cast<int64_t>(window.size());
 
     if (active_long_speech_) {

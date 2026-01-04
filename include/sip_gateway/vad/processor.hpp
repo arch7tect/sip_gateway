@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "sip_gateway/vad/correction.hpp"
+
 namespace sip_gateway {
 namespace vad {
 
@@ -23,7 +25,11 @@ public:
                           int short_pause_ms,
                           int long_pause_ms,
                           int user_silence_duration_ms,
-                          int speech_prob_window);
+                          int speech_prob_window,
+                          bool use_dynamic_corrections,
+                          bool correction_debug,
+                          double correction_enter_thres,
+                          double correction_exit_thres);
 
     void set_on_speech_start(SpeechCallback cb);
     void set_on_speech_end(SpeechCallback cb);
@@ -33,6 +39,9 @@ public:
 
     void process_samples(const std::vector<int16_t>& samples);
     void finalize();
+    void start_user_silence();
+    void reset_user_salience();
+    void cancel_user_salience();
 
 private:
     void process_window(const std::vector<float>& window);
@@ -67,6 +76,8 @@ private:
     std::vector<float> silence_pad_buffer_;
     std::deque<float> prob_history_;
     std::vector<float> state_;
+    bool use_dynamic_corrections_ = true;
+    std::unique_ptr<DynamicCorrection> correction_;
 
     int64_t current_sample_ = 0;
     bool active_speech_ = false;
