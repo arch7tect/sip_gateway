@@ -457,7 +457,7 @@ void SipApp::init_pjsip() {
         logger->info(with_kv(
             "Supported codec",
             {kv("codec_id", codec.codecId),
-             kv("priority", codec.priority)}));
+             kv("priority", static_cast<int>(codec.priority))}));
     }
     if (config_.sip_null_device) {
         endpoint_->audDevManager().setNullDev();
@@ -502,6 +502,10 @@ void SipApp::init_vad() {
     }
     auto logger = logging::get_logger();
     try {
+        logger->info(with_kv(
+            "VAD model setup",
+            {kv("path", config_.vad_model_path.string()),
+             kv("url", config_.vad_model_url)}));
         if (!std::filesystem::exists(config_.vad_model_path)) {
             logger->info(with_kv(
                 "VAD model file missing, downloading",
@@ -509,7 +513,20 @@ void SipApp::init_vad() {
                  kv("url", config_.vad_model_url)}));
             if (config_.vad_model_url.empty() ||
                 !download_file(config_.vad_model_url, config_.vad_model_path)) {
+                logger->error(with_kv(
+                    "VAD model download failed",
+                    {kv("path", config_.vad_model_path.string()),
+                     kv("url", config_.vad_model_url)}));
                 throw std::runtime_error("failed to download VAD model");
+            }
+            std::error_code size_ec;
+            const auto size = std::filesystem::file_size(config_.vad_model_path, size_ec);
+            if (size_ec || size == 0) {
+                logger->error(with_kv(
+                    "VAD model download produced empty file",
+                    {kv("path", config_.vad_model_path.string()),
+                     kv("url", config_.vad_model_url)}));
+                throw std::runtime_error("downloaded VAD model is empty");
             }
         }
         vad_model_ = std::make_shared<vad::VadModel>(
@@ -522,7 +539,8 @@ void SipApp::init_vad() {
         logger->error(with_kv(
             "VAD model load failed",
             {kv("error", ex.what()),
-             kv("path", config_.vad_model_path.string())}));
+             kv("path", config_.vad_model_path.string()),
+             kv("url", config_.vad_model_url)}));
         throw;
     }
 }
