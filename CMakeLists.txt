@@ -35,6 +35,7 @@ add_executable(sip_gateway
     src/sip/app.cpp
     src/sip/account.cpp
     src/sip/call.cpp
+    src/server/rest_server.cpp
     include/sip_gateway/config.hpp
     include/sip_gateway/logging.hpp
     include/sip_gateway/backend/client.hpp
@@ -46,6 +47,7 @@ add_executable(sip_gateway
     include/sip_gateway/sip/app.hpp
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
+    include/sip_gateway/server/rest_server.hpp
 )
 
 target_compile_features(sip_gateway PRIVATE cxx_std_17)

@@ -5,11 +5,11 @@
 #include <thread>
 
 #include <nlohmann/json.hpp>
-#include <httplib.h>
 
 #include "sip_gateway/logging.hpp"
 #include "sip_gateway/sip/account.hpp"
 #include "sip_gateway/sip/call.hpp"
+#include "sip_gateway/server/rest_server.hpp"
 
 namespace sip_gateway {
 
@@ -25,10 +25,18 @@ SipApp::SipApp(Config config)
 void SipApp::init() {
     auto logger = logging::get_logger();
     auto capabilities = backend_client_.get_json("/capabilities");
-    logger->info("Backend capabilities received: {}", capabilities.dump());
+    logger->info(with_kv(
+        "Backend capabilities received",
+        {kv("capabilities", capabilities.dump())}));
 
     init_pjsip();
-    start_rest_server();
+    rest_server_ = std::make_unique<RestServer>(
+        config_,
+        [this](const nlohmann::json& body) { return handle_call_request(body); },
+        [this](const std::string& session_id, const nlohmann::json& body) {
+            return handle_transfer_request(session_id, body);
+        });
+    rest_server_->start();
 }
 
 void SipApp::run() {
@@ -51,7 +59,9 @@ void SipApp::run() {
 
 void SipApp::stop() {
     quitting_ = true;
-    stop_rest_server();
+    if (rest_server_) {
+        rest_server_->stop();
+    }
     shutdown_pjsip();
 }
 
@@ -63,10 +73,14 @@ int SipApp::handle_events() {
         const auto delay_ms = static_cast<int>(config_.events_delay * 1000.0);
         return endpoint_->libHandleEvents(delay_ms);
     } catch (const pj::Error& err) {
-        logging::get_logger()->error("PJSIP handle events error: {} [{}]",
-                                     err.reason, err.status);
+        logging::get_logger()->error(with_kv(
+            "PJSIP handle events error",
+            {kv("reason", err.reason),
+             kv("status", err.status)}));
     } catch (const std::exception& ex) {
-        logging::get_logger()->error("PJSIP handle events exception: {}", ex.what());
+        logging::get_logger()->error(with_kv(
+            "PJSIP handle events exception",
+            {kv("error", ex.what())}));
     }
     return 0;
 }
@@ -103,124 +117,53 @@ const std::string& SipApp::backend_url() const {
     return config_.backend_url;
 }
 
-void SipApp::start_rest_server() {
-    rest_server_ = std::make_unique<httplib::Server>();
+RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
     auto logger = logging::get_logger();
-
-    rest_server_->Get("/health", [logger](const httplib::Request&, httplib::Response& res) {
-        nlohmann::json payload{{"status", "ok"}};
-        res.set_content(payload.dump(), "application/json");
-        logger->debug("Health check served");
-    });
-
-    rest_server_->Get("/metrics", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content("", "text/plain");
-    });
-
-    rest_server_->Post("/call", [this, logger](const httplib::Request& req, httplib::Response& res) {
-        if (!authorize_request(req, res)) {
-            return;
-        }
-        nlohmann::json body;
-        try {
-            body = nlohmann::json::parse(req.body);
-            if (!body.contains("to_uri")) {
-                res.status = 400;
-                res.set_content(R"({"message":"to_uri is required"})", "application/json");
-                return;
-            }
-        } catch (const std::exception& ex) {
-            logger->error("Failed to parse /call request: {}", ex.what());
-            res.status = 400;
-            res.set_content(R"({"message":"invalid request body"})", "application/json");
-            return;
-        }
-        try {
-            const auto to_uri = body.at("to_uri").get<std::string>();
-            nlohmann::json env_info = nlohmann::json::object();
-            if (body.contains("env_info") && body["env_info"].is_object()) {
-                env_info = body["env_info"];
-            }
-            std::optional<std::string> communication_id;
-            if (body.contains("communication_id") && body["communication_id"].is_string()) {
-                communication_id = body["communication_id"].get<std::string>();
-            }
-            logger->info("Making outbound call. [to_uri={}, communication_id={}]", to_uri,
-                         communication_id.value_or(""));
-            auto backend_session =
-                create_backend_session(to_uri, "", "", env_info, communication_id);
-            if (!account_) {
-                res.status = 503;
-                res.set_content(R"({"message":"sip not initialized"})", "application/json");
-                return;
-            }
-            auto call = std::make_shared<SipCall>(*this, *account_, backend_url());
-            bind_session(call, backend_session.session_id);
-            call->connect_ws(
-                [logger](const nlohmann::json& message) {
-                    logger->debug("WebSocket message received: {}", message.dump());
-                },
-                [logger]() {
-                    logger->info("WebSocket timeout received");
-                },
-                [logger]() {
-                    logger->info("WebSocket close received");
-                });
-            call->make_call(to_uri);
-            register_call(call);
-            nlohmann::json payload{{"message", "ok"}, {"session_id", backend_session.session_id}};
-            res.set_content(payload.dump(), "application/json");
-            res.status = 200;
-        } catch (const std::exception& ex) {
-            logger->error("Failed to create backend session: {}", ex.what());
-            res.status = 500;
-            res.set_content(R"({"message":"failed to start session"})", "application/json");
-        }
-    });
-
-    rest_server_->Post(R"(/transfer/([A-Za-z0-9_-]+))",
-                       [this, logger](const httplib::Request& req, httplib::Response& res) {
-        if (!authorize_request(req, res)) {
-            return;
-        }
-        (void)req;
-        res.status = 501;
-        res.set_content(R"({"message":"transfer handling not implemented"})", "application/json");
-    });
-
-    rest_thread_ = std::thread([this, logger]() {
-        logger->info("REST server listening on port {}", config_.sip_rest_api_port);
-        rest_server_->listen("0.0.0.0", config_.sip_rest_api_port);
-    });
+    if (!body.contains("to_uri")) {
+        return {400, nlohmann::json{{"message", "to_uri is required"}}};
+    }
+    const auto to_uri = body.at("to_uri").get<std::string>();
+    nlohmann::json env_info = nlohmann::json::object();
+    if (body.contains("env_info") && body["env_info"].is_object()) {
+        env_info = body["env_info"];
+    }
+    std::optional<std::string> communication_id;
+    if (body.contains("communication_id") && body["communication_id"].is_string()) {
+        communication_id = body["communication_id"].get<std::string>();
+    }
+    logger->info(with_kv(
+        "Making outbound call",
+        {kv("to_uri", to_uri),
+         kv("communication_id", communication_id.value_or(""))}));
+    auto backend_session =
+        create_backend_session(to_uri, "", "", env_info, communication_id);
+    if (!account_) {
+        return {503, nlohmann::json{{"message", "sip not initialized"}}};
+    }
+    auto call = std::make_shared<SipCall>(*this, *account_, backend_url());
+    bind_session(call, backend_session.session_id);
+    call->connect_ws(
+        [logger](const nlohmann::json& message) {
+            logger->debug(with_kv(
+                "WebSocket message received",
+                {kv("message", message.dump())}));
+        },
+        [logger]() {
+            logger->info("WebSocket timeout received");
+        },
+        [logger]() {
+            logger->info("WebSocket close received");
+        });
+    call->make_call(to_uri);
+    register_call(call);
+    return {200, nlohmann::json{{"message", "ok"}, {"session_id", backend_session.session_id}}};
 }
 
-void SipApp::stop_rest_server() {
-    if (rest_server_) {
-        rest_server_->stop();
-    }
-    if (rest_thread_.joinable()) {
-        rest_thread_.join();
-    }
-}
-
-bool SipApp::authorize_request(const httplib::Request& request,
-                               httplib::Response& response) const {
-    if (!config_.authorization_token) {
-        return true;
-    }
-    const auto it = request.headers.find("Authorization");
-    if (it == request.headers.end()) {
-        response.status = 401;
-        response.set_content(R"({"message":"missing authorization"})", "application/json");
-        return false;
-    }
-    const auto expected = "Bearer " + *config_.authorization_token;
-    if (it->second != expected) {
-        response.status = 403;
-        response.set_content(R"({"message":"invalid authorization"})", "application/json");
-        return false;
-    }
-    return true;
+RestResponse SipApp::handle_transfer_request(const std::string& session_id,
+                                             const nlohmann::json& body) {
+    (void)body;
+    (void)session_id;
+    return {501, nlohmann::json{{"message", "transfer handling not implemented"}}};
 }
 
 void SipApp::handle_incoming_call(const std::shared_ptr<SipCall>& call,
@@ -233,7 +176,9 @@ void SipApp::handle_incoming_call(const std::shared_ptr<SipCall>& call,
     bind_session(call, backend_session.session_id);
     call->connect_ws(
         [logger](const nlohmann::json& message) {
-            logger->debug("WebSocket message received: {}", message.dump());
+            logger->debug(with_kv(
+                "WebSocket message received",
+                {kv("message", message.dump())}));
         },
         [logger]() {
             logger->info("WebSocket timeout received");
@@ -322,7 +267,10 @@ void SipApp::init_pjsip() {
         endpoint_->codecSetPriority(item.first, item.second);
     }
     for (const auto& codec : endpoint_->codecEnum2()) {
-        logger->info("Supported codec. [codec_id={}, priority={}]", codec.codecId, codec.priority);
+        logger->info(with_kv(
+            "Supported codec",
+            {kv("codec_id", codec.codecId),
+             kv("priority", codec.priority)}));
     }
     if (config_.sip_null_device) {
         endpoint_->audDevManager().setNullDev();

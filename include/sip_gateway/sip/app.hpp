@@ -11,14 +11,9 @@
 #include "sip_gateway/backend/client.hpp"
 #include "sip_gateway/config.hpp"
 #include "sip_gateway/sip/account.hpp"
+#include "sip_gateway/server/rest_server.hpp"
 #include <nlohmann/json.hpp>
 #include <pjsua2.hpp>
-
-namespace httplib {
-class Server;
-class Request;
-class Response;
-}
 
 namespace sip_gateway {
 
@@ -56,9 +51,9 @@ private:
                                           const std::string& conversation_id,
                                           const nlohmann::json& kwargs,
                                           const std::optional<std::string>& communication_id);
-    void start_rest_server();
-    void stop_rest_server();
-    bool authorize_request(const httplib::Request& request, httplib::Response& response) const;
+    RestResponse handle_call_request(const nlohmann::json& body);
+    RestResponse handle_transfer_request(const std::string& session_id,
+                                         const nlohmann::json& body);
 
     const std::string& backend_url() const;
 
@@ -70,8 +65,7 @@ private:
     std::unordered_map<std::string, int> session_calls_;
     std::mutex calls_mutex_;
     std::atomic<bool> quitting_{false};
-    std::unique_ptr<httplib::Server> rest_server_;
-    std::thread rest_thread_;
+    std::unique_ptr<RestServer> rest_server_;
 };
 
 }

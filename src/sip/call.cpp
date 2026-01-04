@@ -59,28 +59,33 @@ void SipCall::onCallState(pj::OnCallStateParam& prm) {
     (void)prm;
     try {
         const auto info = getInfo();
-        logging::get_logger()->debug(
-            "Call state changed. [call_id={}, uri={}, state={}, state_text={}, session_id={}]",
-            info.callIdString,
-            info.remoteUri,
-            static_cast<int>(info.state),
-            info.stateText,
-            session_id_.value_or(""));
+        logging::get_logger()->debug(with_kv(
+            "Call state changed",
+            {kv("call_id", info.callIdString),
+             kv("uri", info.remoteUri),
+             kv("state", static_cast<int>(info.state)),
+             kv("state_text", info.stateText),
+             kv("session_id", session_id_.value_or(""))}));
         if (info.state == PJSIP_INV_STATE_DISCONNECTED) {
             app_.handle_call_disconnected(getId());
         }
     } catch (const std::exception& ex) {
-        logging::get_logger()->error("Call state handler exception: {}", ex.what());
+        logging::get_logger()->error(with_kv(
+            "Call state handler exception",
+            {kv("error", ex.what())}));
     }
 }
 
 void SipCall::onCallMediaState(pj::OnCallMediaStateParam& prm) {
     (void)prm;
     try {
-        logging::get_logger()->debug("Call media state changed. [session_id={}]",
-                                     session_id_.value_or(""));
+        logging::get_logger()->debug(with_kv(
+            "Call media state changed",
+            {kv("session_id", session_id_.value_or(""))}));
     } catch (const std::exception& ex) {
-        logging::get_logger()->error("Call media handler exception: {}", ex.what());
+        logging::get_logger()->error(with_kv(
+            "Call media handler exception",
+            {kv("error", ex.what())}));
     }
 }
 

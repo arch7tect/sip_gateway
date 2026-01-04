@@ -12,13 +12,18 @@ int main() {
         config.validate();
         sip_gateway::logging::init(config);
         auto logger = sip_gateway::logging::get_logger();
-        logger->info("Starting sip-gateway. backend_url={}, rest_port={}, main_thread_only={}",
-                     config.backend_url, config.sip_rest_api_port, config.ua_main_thread_only);
+        logger->info(sip_gateway::with_kv(
+            "Starting sip-gateway",
+            {sip_gateway::kv("backend_url", config.backend_url),
+             sip_gateway::kv("rest_port", config.sip_rest_api_port),
+             sip_gateway::kv("main_thread_only", config.ua_main_thread_only)}));
         sip_gateway::SipApp app(config);
         app.init();
         app.run();
     } catch (const std::exception& ex) {
-        spdlog::error("Startup failed: {}", ex.what());
+        spdlog::error(sip_gateway::with_kv(
+            "Startup failed",
+            {sip_gateway::kv("error", ex.what())}));
         return 1;
     }
     return 0;
