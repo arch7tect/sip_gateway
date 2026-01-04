@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "sip_gateway/metrics.hpp"
+
 namespace sip_gateway {
 
 namespace {
@@ -68,6 +70,7 @@ BackendClient::BackendClient(std::string base_url,
 }
 
 nlohmann::json BackendClient::get_json(const std::string& path) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Accept", "application/json"}};
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
@@ -88,6 +91,7 @@ nlohmann::json BackendClient::get_json(const std::string& path) {
 }
 
 nlohmann::json BackendClient::post_json(const std::string& path, const nlohmann::json& body) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Content-Type", "application/json"},
                                     {"Accept", "application/json"}};
     if (authorization_token_) {
@@ -113,6 +117,7 @@ nlohmann::json BackendClient::post_json(const std::string& path, const nlohmann:
 nlohmann::json BackendClient::post_multipart_json(const std::string& path,
                                                   const std::string& field_name,
                                                   const nlohmann::json& body) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Accept", "application/json"}};
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
@@ -135,6 +140,7 @@ nlohmann::json BackendClient::post_multipart_json(const std::string& path,
 }
 
 nlohmann::json BackendClient::put_json(const std::string& path, const nlohmann::json& body) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Content-Type", "application/json"},
                                     {"Accept", "application/json"}};
     if (authorization_token_) {
@@ -158,6 +164,7 @@ nlohmann::json BackendClient::put_json(const std::string& path, const nlohmann::
 }
 
 nlohmann::json BackendClient::delete_json(const std::string& path) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Accept", "application/json"}};
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
@@ -180,6 +187,7 @@ nlohmann::json BackendClient::delete_json(const std::string& path) {
 nlohmann::json BackendClient::post_binary(const std::string& path,
                                           const std::string& content_type,
                                           const std::string& payload) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Content-Type", content_type},
                                     {"Accept", "application/json"}};
     if (authorization_token_) {
@@ -203,6 +211,7 @@ nlohmann::json BackendClient::post_binary(const std::string& path,
 }
 
 std::string BackendClient::get_binary(const std::string& path, const std::string& query) {
+    Metrics::instance().increment_request();
     auto headers = httplib::Headers{{"Accept", "*/*"}};
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);

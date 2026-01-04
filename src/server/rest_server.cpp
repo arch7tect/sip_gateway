@@ -1,6 +1,7 @@
 #include "sip_gateway/server/rest_server.hpp"
 
 #include "sip_gateway/logging.hpp"
+#include "sip_gateway/metrics.hpp"
 #include "sip_gateway/utils/async.hpp"
 
 namespace sip_gateway {
@@ -20,7 +21,8 @@ void RestServer::start() {
     });
 
     server_->Get("/metrics", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content("", "text/plain");
+        res.set_content(Metrics::instance().render_prometheus(),
+                        "text/plain; version=0.0.4");
     });
 
     server_->Post("/call", [this](const httplib::Request& req, httplib::Response& res) {

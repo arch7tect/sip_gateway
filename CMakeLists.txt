@@ -36,6 +36,7 @@ add_executable(sip_gateway
     src/sip/account.cpp
     src/sip/call.cpp
     src/server/rest_server.cpp
+    src/metrics.cpp
     src/vad/model.cpp
     src/vad/correction.cpp
     src/vad/processor.cpp
@@ -51,6 +52,7 @@ add_executable(sip_gateway
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
     include/sip_gateway/server/rest_server.hpp
+    include/sip_gateway/metrics.hpp
     include/sip_gateway/vad/model.hpp
     include/sip_gateway/vad/correction.hpp
     include/sip_gateway/vad/processor.hpp

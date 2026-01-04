@@ -11,6 +11,7 @@
 #include <cctype>
 
 #include "sip_gateway/logging.hpp"
+#include "sip_gateway/metrics.hpp"
 #include "sip_gateway/sip/app.hpp"
 #include "sip_gateway/utils/async.hpp"
 #include "sip_gateway/vad/model.hpp"
@@ -82,6 +83,17 @@ void SipCall::set_greeting(std::optional<std::string> greeting) {
 void SipCall::handle_ws_message(const nlohmann::json& message) {
     const auto type = message.value("type", "");
     if (type == "message") {
+        std::optional<std::chrono::steady_clock::time_point> reply_start;
+        {
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            reply_start = start_reply_generation_;
+            start_reply_generation_.reset();
+        }
+        if (reply_start) {
+            const auto elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - *reply_start).count();
+            Metrics::instance().observe_response_time("generate", elapsed);
+        }
         const auto text = message.value("message", "");
         if (!text.empty()) {
             if (user_speaking_) {
@@ -412,12 +424,18 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
         vad_processor_->cancel_user_salience();
     }
     set_state(CallState::WaitForUser);
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        short_pause_handled_ = false;
+        long_pause_handled_ = false;
+        last_unstable_transcription_.clear();
+    }
 
     utils::run_async([this]() {
         bool allow_rollback = false;
         {
             std::lock_guard<std::mutex> lock(generation_mutex_);
-            allow_rollback = !commit_in_flight_;
+            allow_rollback = !commit_in_flight_ && spec_active_;
         }
         if (!allow_rollback) {
             return;
@@ -457,7 +475,7 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
     }
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
-        if (start_in_flight_ || commit_in_flight_ || start_sent_) {
+        if (start_in_flight_ || commit_in_flight_ || short_pause_handled_ || long_pause_handled_) {
             return;
         }
         start_in_flight_ = true;
@@ -480,14 +498,10 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                         {kv("session_id", session_id_.value_or(""))});
                     return;
                 }
-                clear_pending_tts();
-                if (player_) {
-                    player_->interrupt();
-                }
-                last_unstable_transcription_ = text;
                 start_session_text(text);
                 std::lock_guard<std::mutex> lock(generation_mutex_);
-                start_sent_ = true;
+                spec_active_ = true;
+                short_pause_handled_ = true;
                 set_state(CallState::SpeculativeGenerate);
             }
         } catch (const std::exception& ex) {
@@ -512,7 +526,7 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
     }
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
-        if (commit_in_flight_) {
+        if (commit_in_flight_ || long_pause_handled_) {
             return;
         }
         commit_in_flight_ = true;
@@ -542,7 +556,7 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
             bool has_start = false;
             {
                 std::lock_guard<std::mutex> lock(generation_mutex_);
-                has_start = start_sent_;
+                has_start = spec_active_;
             }
             if (!has_start) {
                 const auto text = transcribe_audio(audio_copy);
@@ -553,14 +567,16 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                 }
                 start_session_text(text);
                 std::lock_guard<std::mutex> lock(generation_mutex_);
-                start_sent_ = true;
+                spec_active_ = true;
+                short_pause_handled_ = true;
                 set_state(CallState::SpeculativeGenerate);
             }
             set_state(CallState::CommitGenerate);
             user_speaking_ = false;
             commit_session();
             std::lock_guard<std::mutex> lock(generation_mutex_);
-            start_sent_ = false;
+            spec_active_ = false;
+            long_pause_handled_ = true;
         } catch (const std::exception& ex) {
             logging::error(
                 "Long pause handling failed",
@@ -645,7 +661,12 @@ std::string SipCall::transcribe_audio(const std::vector<float>& audio) const {
         return "";
     }
     const auto wav_bytes = encode_wav(audio);
-    return app_.transcribe_audio(wav_bytes);
+    const auto start = std::chrono::steady_clock::now();
+    const auto text = app_.transcribe_audio(wav_bytes);
+    const auto elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - start).count();
+    Metrics::instance().observe_response_time("transcribe", elapsed);
+    return text;
 }
 
 void SipCall::start_session_text(const std::string& text) {
@@ -654,6 +675,16 @@ void SipCall::start_session_text(const std::string& text) {
     }
     if (text.empty()) {
         return;
+    }
+    clear_pending_tts();
+    if (player_) {
+        player_->interrupt();
+    }
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        last_unstable_transcription_ = text;
+        start_reply_generation_ = std::chrono::steady_clock::now();
+        start_response_generation_ = *start_reply_generation_;
     }
     app_.start_session_text(*session_id_, text);
 }
@@ -705,9 +736,10 @@ void SipCall::rollback_session() {
     bool needs_rollback = false;
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
-        if ((start_in_flight_ || start_sent_) && !commit_in_flight_) {
+        if (spec_active_ && !commit_in_flight_) {
             needs_rollback = true;
-            start_sent_ = false;
+            spec_active_ = false;
+            short_pause_handled_ = false;
             start_in_flight_ = false;
         }
     }
@@ -887,17 +919,40 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         return;
     }
     try {
+        std::optional<std::chrono::steady_clock::time_point> response_start;
+        {
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            response_start = start_response_generation_;
+        }
         logging::debug(
             "TTS sending to SIP",
             {kv("text", text),
              kv("session_id", session_id_.value_or(""))});
+        const auto synth_start = std::chrono::steady_clock::now();
         const auto blob = app_.synthesize_session_audio(*session_id_, text);
+        const auto synth_elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - synth_start).count();
+        if (response_start) {
+            Metrics::instance().observe_response_time("synthesize", synth_elapsed);
+        }
         if (blob.size() < 364) {
             logging::info(
                 "TTS audio too short",
                 {kv("blob_size", static_cast<int>(blob.size())),
                  kv("session_id", *session_id_)});
             return;
+        }
+        if (response_start) {
+            const auto response_elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - *response_start).count();
+            Metrics::instance().observe_response_time("play_queue", response_elapsed);
+            Metrics::instance().observe_response_summary("play_queue", response_elapsed);
+            logging::debug(
+                "Response ready",
+                {kv("elapsed_sec", response_elapsed),
+                 kv("session_id", session_id_.value_or(""))});
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            start_response_generation_.reset();
         }
         const auto filename = make_tts_path();
         std::error_code ec;

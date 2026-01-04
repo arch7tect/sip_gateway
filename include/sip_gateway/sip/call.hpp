@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -99,6 +100,8 @@ private:
     bool user_speaking_ = false;
     bool soft_hangup_pending_ = false;
     std::string last_unstable_transcription_;
+    std::optional<std::chrono::steady_clock::time_point> start_reply_generation_;
+    std::optional<std::chrono::steady_clock::time_point> start_response_generation_;
     std::unique_ptr<pj::AudioMedia> audio_media_;
     std::unique_ptr<audio::AudioMediaPort> media_port_;
     std::unique_ptr<audio::CallRecorder> recorder_;
@@ -108,7 +111,9 @@ private:
     std::mutex generation_mutex_;
     bool start_in_flight_ = false;
     bool commit_in_flight_ = false;
-    bool start_sent_ = false;
+    bool spec_active_ = false;
+    bool short_pause_handled_ = false;
+    bool long_pause_handled_ = false;
     bool finished_ = false;
     CallState state_ = CallState::WaitForUser;
 };
