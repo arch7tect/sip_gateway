@@ -5,8 +5,6 @@
 #include <vector>
 
 #include <pjsua2.hpp>
-#include "spdlog/logger.h"
-
 namespace sip_gateway {
 namespace audio {
 
@@ -26,7 +24,6 @@ public:
 private:
     FrameHandler on_frame_received_;
     FrameProvider on_frame_requested_;
-    std::shared_ptr<spdlog::logger> logger_;
 };
 
 }

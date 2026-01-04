@@ -9,8 +9,7 @@
 namespace sip_gateway {
 namespace audio {
 
-AudioMediaPort::AudioMediaPort()
-    : logger_(logging::get_logger()) {}
+AudioMediaPort::AudioMediaPort() = default;
 
 void AudioMediaPort::set_on_frame_received(FrameHandler handler) {
     on_frame_received_ = std::move(handler);

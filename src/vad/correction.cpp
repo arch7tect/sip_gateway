@@ -213,12 +213,12 @@ bool DynamicCorrection::process_frame(double speech_prob, double frame_energy) {
     }
 
     if (cfg_.debug) {
-        logging::get_logger()->debug(with_kv(
+        logging::trace(
             "VAD correction frame",
             {kv("frame", frame_index_),
              kv("prob", speech_prob),
              kv("score", mean_score),
-             kv("state", state_ ? "SPEECH" : "SILENCE")}));
+             kv("state", state_ ? "SPEECH" : "SILENCE")});
     }
 
     ++frame_index_;

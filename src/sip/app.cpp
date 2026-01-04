@@ -98,7 +98,6 @@ std::string resolve_redirect_url(const std::string& base_url,
 }
 
 bool download_file(const std::string& url, const std::filesystem::path& path) {
-    auto logger = logging::get_logger();
     std::string current_url = url;
     for (int attempt = 0; attempt < 5; ++attempt) {
         std::string scheme;
@@ -139,9 +138,9 @@ bool download_file(const std::string& url, const std::filesystem::path& path) {
 
         auto response = get_response(base_path);
         if (!response) {
-            logger->error(with_kv(
+            logging::error(
                 "VAD model download request failed",
-                {kv("url", current_url)}));
+                {kv("url", current_url)});
             return false;
         }
         if (response->status >= 200 && response->status < 300) {
@@ -158,47 +157,47 @@ bool download_file(const std::string& url, const std::filesystem::path& path) {
             response->status == 308) {
             auto location_it = response->headers.find("Location");
             if (location_it == response->headers.end()) {
-                logger->error(with_kv(
+                logging::error(
                     "VAD model download redirect missing location",
                     {kv("status", response->status),
-                     kv("url", current_url)}));
+                     kv("url", current_url)});
                 return false;
             }
             const auto next_url = resolve_redirect_url(current_url, location_it->second);
             if (next_url.empty()) {
-                logger->error(with_kv(
+                logging::error(
                     "VAD model download redirect invalid",
                     {kv("location", location_it->second),
-                     kv("url", current_url)}));
+                     kv("url", current_url)});
                 return false;
             }
-            logger->info(with_kv(
+            logging::info(
                 "VAD model download redirect",
                 {kv("status", response->status),
                  kv("from", current_url),
-                 kv("to", next_url)}));
+                 kv("to", next_url)});
             current_url = next_url;
             continue;
         }
         if (!response->body.empty()) {
             const size_t limit = 256;
             std::string snippet = response->body.substr(0, limit);
-            logger->error(with_kv(
+            logging::error(
                 "VAD model download failed",
                 {kv("status", response->status),
                  kv("url", current_url),
-                 kv("response", snippet)}));
+                 kv("response", snippet)});
         } else {
-            logger->error(with_kv(
+            logging::error(
                 "VAD model download failed",
                 {kv("status", response->status),
-                 kv("url", current_url)}));
+                 kv("url", current_url)});
         }
         return false;
     }
-    logger->error(with_kv(
+    logging::error(
         "VAD model download failed: too many redirects",
-        {kv("url", current_url)}));
+        {kv("url", current_url)});
     return false;
 }
 
@@ -228,11 +227,10 @@ SipApp::SipApp(Config config)
       account_(nullptr) {}
 
 void SipApp::init() {
-    auto logger = logging::get_logger();
     auto capabilities = backend_client_.get_json("/capabilities");
-    logger->info(with_kv(
+    logging::info(
         "Backend capabilities received",
-        {kv("capabilities", capabilities.dump())}));
+        {kv("capabilities", capabilities.dump())});
 
     init_pjsip();
     init_vad();
@@ -282,7 +280,7 @@ std::string SipApp::synthesize_session_audio(const std::string& session_id,
 }
 
 std::string SipApp::transcribe_audio(const std::string& wav_bytes) {
-    auto response = backend_client_.post_binary("/transcribe", "audio/wav", wav_bytes);
+    auto response = backend_client_.post_binary("/transcribe", "wav", wav_bytes);
     if (response.is_string()) {
         return response.get<std::string>();
     }
@@ -322,14 +320,12 @@ int SipApp::handle_events() {
         const auto delay_ms = static_cast<int>(config_.events_delay * 1000.0);
         return endpoint_->libHandleEvents(delay_ms);
     } catch (const pj::Error& err) {
-        logging::get_logger()->error(with_kv(
-            "PJSIP handle events error",
-            {kv("reason", err.reason),
-             kv("status", err.status)}));
+        logging::error("PJSIP handle events error",
+                       {kv("reason", err.reason),
+                        kv("status", err.status)});
     } catch (const std::exception& ex) {
-        logging::get_logger()->error(with_kv(
-            "PJSIP handle events exception",
-            {kv("error", ex.what())}));
+        logging::error("PJSIP handle events exception",
+                       {kv("error", ex.what())});
     }
     return 0;
 }
@@ -367,7 +363,6 @@ const std::string& SipApp::backend_url() const {
 }
 
 RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
-    auto logger = logging::get_logger();
     if (!body.contains("to_uri")) {
         return {400, nlohmann::json{{"message", "to_uri is required"}}};
     }
@@ -380,10 +375,10 @@ RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
     if (body.contains("communication_id") && body["communication_id"].is_string()) {
         communication_id = body["communication_id"].get<std::string>();
     }
-    logger->info(with_kv(
+    logging::info(
         "Making outbound call",
         {kv("to_uri", to_uri),
-         kv("communication_id", communication_id.value_or(""))}));
+         kv("communication_id", communication_id.value_or(""))});
     auto backend_session =
         create_backend_session(to_uri, "", "", env_info, communication_id);
     if (!account_) {
@@ -409,7 +404,6 @@ RestResponse SipApp::handle_call_request(const nlohmann::json& body) {
 
 RestResponse SipApp::handle_transfer_request(const std::string& session_id,
                                              const nlohmann::json& body) {
-    auto logger = logging::get_logger();
     if (!body.contains("to_uri") || !body["to_uri"].is_string()) {
         return {400, nlohmann::json{{"message", "to_uri is required"}}};
     }
@@ -439,20 +433,20 @@ RestResponse SipApp::handle_transfer_request(const std::string& session_id,
             return {400, nlohmann::json{{"message", "call is not active"}}};
         }
     } catch (const pj::Error& ex) {
-        logger->error(with_kv(
+        logging::error(
             "Failed to inspect call state",
             {kv("reason", ex.reason),
              kv("status", ex.status),
-             kv("session_id", session_id)}));
+             kv("session_id", session_id)});
         return {500, nlohmann::json{{"message", "call state error"}}};
     }
 
     call->set_transfer_target(to_uri, transfer_delay);
-    logger->info(with_kv(
+    logging::info(
         "Transfer target set",
         {kv("to_uri", to_uri),
          kv("transfer_delay", transfer_delay),
-         kv("session_id", session_id)}));
+         kv("session_id", session_id)});
     return {200, nlohmann::json{{"status", "ok"},
                                 {"message", "Successfully transferred"},
                                 {"session_id", session_id},
@@ -521,7 +515,6 @@ void SipApp::handle_call_disconnected(int call_id) {
 }
 
 void SipApp::init_pjsip() {
-    auto logger = logging::get_logger();
     endpoint_ = std::make_unique<pj::Endpoint>();
     endpoint_->libCreate();
 
@@ -558,10 +551,10 @@ void SipApp::init_pjsip() {
         endpoint_->codecSetPriority(item.first, item.second);
     }
     for (const auto& codec : endpoint_->codecEnum2()) {
-        logger->info(with_kv(
+        logging::info(
             "Supported codec",
             {kv("codec_id", codec.codecId),
-             kv("priority", static_cast<int>(codec.priority))}));
+             kv("priority", static_cast<int>(codec.priority))});
     }
     if (config_.sip_null_device) {
         endpoint_->audDevManager().setNullDev();
@@ -604,47 +597,46 @@ void SipApp::init_vad() {
     if (vad_model_) {
         return;
     }
-    auto logger = logging::get_logger();
     try {
-        logger->info(with_kv(
+        logging::info(
             "VAD model setup",
             {kv("path", config_.vad_model_path.string()),
-             kv("url", config_.vad_model_url)}));
+             kv("url", config_.vad_model_url)});
         if (!std::filesystem::exists(config_.vad_model_path)) {
-            logger->info(with_kv(
+            logging::info(
                 "VAD model file missing, downloading",
                 {kv("path", config_.vad_model_path.string()),
-                 kv("url", config_.vad_model_url)}));
+                 kv("url", config_.vad_model_url)});
             if (config_.vad_model_url.empty() ||
                 !download_file(config_.vad_model_url, config_.vad_model_path)) {
-                logger->error(with_kv(
+                logging::error(
                     "VAD model download failed",
                     {kv("path", config_.vad_model_path.string()),
-                     kv("url", config_.vad_model_url)}));
+                     kv("url", config_.vad_model_url)});
                 throw std::runtime_error("failed to download VAD model");
             }
             std::error_code size_ec;
             const auto size = std::filesystem::file_size(config_.vad_model_path, size_ec);
             if (size_ec || size == 0) {
-                logger->error(with_kv(
+                logging::error(
                     "VAD model download produced empty file",
                     {kv("path", config_.vad_model_path.string()),
-                     kv("url", config_.vad_model_url)}));
+                     kv("url", config_.vad_model_url)});
                 throw std::runtime_error("downloaded VAD model is empty");
             }
         }
         vad_model_ = std::make_shared<vad::VadModel>(
             config_.vad_model_path, config_.vad_sampling_rate);
-        logger->info(with_kv(
+        logging::info(
             "VAD model loaded",
             {kv("path", config_.vad_model_path.string()),
-             kv("sampling_rate", config_.vad_sampling_rate)}));
+             kv("sampling_rate", config_.vad_sampling_rate)});
     } catch (const std::exception& ex) {
-        logger->error(with_kv(
+        logging::error(
             "VAD model load failed",
             {kv("error", ex.what()),
              kv("path", config_.vad_model_path.string()),
-             kv("url", config_.vad_model_url)}));
+             kv("url", config_.vad_model_url)});
         throw;
     }
 }

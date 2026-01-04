@@ -30,7 +30,6 @@ SmartPlayer::SmartPlayer(
     std::function<void()> on_stop_callback
 )
     : on_stop_callback_(std::move(on_stop_callback)),
-      logger_(logging::get_logger()),
       active_(false)
       ,
       audio_media_(audio_media),
@@ -81,7 +80,7 @@ void SmartPlayer::play_next() {
     queue_.pop_front();
 
     if (tearing_down_) {
-        logger_->debug("Skip play_next during teardown.");
+        logging::debug("Skip play_next during teardown.");
         return;
     }
 

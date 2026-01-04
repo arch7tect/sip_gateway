@@ -11,19 +11,18 @@ RestServer::RestServer(const Config& config, CallHandler on_call, TransferHandle
 
 void RestServer::start() {
     server_ = std::make_unique<httplib::Server>();
-    auto logger = logging::get_logger();
 
-    server_->Get("/health", [logger](const httplib::Request&, httplib::Response& res) {
+    server_->Get("/health", [](const httplib::Request&, httplib::Response& res) {
         nlohmann::json payload{{"status", "ok"}};
         res.set_content(payload.dump(), "application/json");
-        logger->debug("Health check served");
+        logging::debug("Health check served");
     });
 
     server_->Get("/metrics", [](const httplib::Request&, httplib::Response& res) {
         res.set_content("", "text/plain");
     });
 
-    server_->Post("/call", [this, logger](const httplib::Request& req, httplib::Response& res) {
+    server_->Post("/call", [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorize_request(req, res)) {
             return;
         }
@@ -31,9 +30,9 @@ void RestServer::start() {
         try {
             body = nlohmann::json::parse(req.body);
         } catch (const std::exception& ex) {
-            logger->error(with_kv(
+            logging::error(
                 "Failed to parse /call request",
-                {kv("error", ex.what())}));
+                {kv("error", ex.what())});
             res.status = 400;
             res.set_content(R"({"message":"invalid request body"})", "application/json");
             return;
@@ -42,16 +41,16 @@ void RestServer::start() {
             const auto payload = on_call_(body);
             write_json(res, payload);
         } catch (const std::exception& ex) {
-            logger->error(with_kv(
+            logging::error(
                 "Failed to handle /call request",
-                {kv("error", ex.what())}));
+                {kv("error", ex.what())});
             res.status = 500;
             res.set_content(R"({"message":"failed to start session"})", "application/json");
         }
     });
 
     server_->Post(R"(/transfer/([A-Za-z0-9_-]+))",
-                  [this, logger](const httplib::Request& req, httplib::Response& res) {
+                  [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorize_request(req, res)) {
             return;
         }
@@ -61,9 +60,9 @@ void RestServer::start() {
             try {
                 body = nlohmann::json::parse(req.body);
             } catch (const std::exception& ex) {
-                logger->error(with_kv(
+                logging::error(
                     "Failed to parse /transfer body",
-                    {kv("error", ex.what())}));
+                    {kv("error", ex.what())});
                 res.status = 400;
                 res.set_content(R"({"message":"invalid request body"})", "application/json");
                 return;
@@ -73,18 +72,18 @@ void RestServer::start() {
             const auto payload = on_transfer_(session_id, body);
             write_json(res, payload);
         } catch (const std::exception& ex) {
-            logger->error(with_kv(
+            logging::error(
                 "Failed to handle /transfer request",
-                {kv("error", ex.what())}));
+                {kv("error", ex.what())});
             res.status = 500;
             res.set_content(R"({"message":"transfer failed"})", "application/json");
         }
     });
 
-    server_thread_ = std::thread([this, logger]() {
-        logger->info(with_kv(
+    server_thread_ = std::thread([this]() {
+        logging::info(
             "REST server listening",
-            {kv("port", config_.sip_rest_api_port)}));
+            {kv("port", config_.sip_rest_api_port)});
         server_->listen("0.0.0.0", config_.sip_rest_api_port);
     });
 }

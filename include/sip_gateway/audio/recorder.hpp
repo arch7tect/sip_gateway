@@ -4,8 +4,6 @@
 #include <memory>
 
 #include <pjsua2.hpp>
-#include "spdlog/logger.h"
-
 namespace sip_gateway {
 namespace audio {
 
@@ -28,7 +26,6 @@ public:
 private:
     std::unique_ptr<pj::AudioMediaRecorder> recorder_;
     std::filesystem::path current_file_;
-    std::shared_ptr<spdlog::logger> logger_;
     bool recording_ = false;
 };
 

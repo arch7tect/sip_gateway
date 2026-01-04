@@ -64,7 +64,7 @@ void SipCall::connect_ws(BackendWsClient::MessageHandler on_message,
                          BackendWsClient::EventHandler on_timeout,
                          BackendWsClient::EventHandler on_close) {
     if (!session_id_) {
-        logging::get_logger()->warn("WebSocket connect skipped: session_id is not set");
+        logging::warn("WebSocket connect skipped: session_id is not set");
         return;
     }
     ws_client_.connect(*session_id_, std::move(on_message), std::move(on_timeout),
@@ -85,9 +85,9 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         const auto text = message.value("message", "");
         if (!text.empty()) {
             if (user_speaking_) {
-                logging::get_logger()->debug(with_kv(
+                logging::debug(
                     "WebSocket message discarded (user speaking)",
-                    {kv("session_id", session_id_.value_or(""))}));
+                    {kv("session_id", session_id_.value_or(""))});
                 return;
             }
             if (state_ == CallState::SpeculativeGenerate) {
@@ -99,9 +99,9 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         return;
     }
     if (type == "eos") {
-        logging::get_logger()->debug(with_kv(
+        logging::debug(
             "WebSocket end of stream",
-            {kv("session_id", session_id_.value_or(""))}));
+            {kv("session_id", session_id_.value_or(""))});
         if (state_ == CallState::Finished) {
             play_pending_tts();
             handle_playback_finished();
@@ -113,9 +113,9 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         return;
     }
     if (type == "eoc") {
-        logging::get_logger()->debug(with_kv(
+        logging::debug(
             "WebSocket end of conversation",
-            {kv("session_id", session_id_.value_or(""))}));
+            {kv("session_id", session_id_.value_or(""))});
         if (app_.config().sip_early_eoc && state_ != CallState::SpeculativeGenerate) {
             finished_ = true;
             set_state(CallState::Finished);
@@ -124,35 +124,35 @@ void SipCall::handle_ws_message(const nlohmann::json& message) {
         }
         return;
     }
-    logging::get_logger()->debug(with_kv(
+    logging::debug(
         "WebSocket message received",
         {kv("message", message.dump()),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 }
 
 void SipCall::handle_ws_timeout() {
-    logging::get_logger()->info(with_kv(
+    logging::info(
         "WebSocket timeout received",
-        {kv("session_id", session_id_.value_or(""))}));
+        {kv("session_id", session_id_.value_or(""))});
 }
 
 void SipCall::handle_ws_close() {
-    logging::get_logger()->info(with_kv(
+    logging::info(
         "WebSocket close received",
-        {kv("session_id", session_id_.value_or(""))}));
+        {kv("session_id", session_id_.value_or(""))});
 }
 
 void SipCall::onCallState(pj::OnCallStateParam& prm) {
     (void)prm;
     try {
         const auto info = getInfo();
-        logging::get_logger()->debug(with_kv(
+        logging::debug(
             "Call state changed",
             {kv("call_id", info.callIdString),
              kv("uri", info.remoteUri),
              kv("state", static_cast<int>(info.state)),
              kv("state_text", info.stateText),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
         if (info.state == PJSIP_INV_STATE_CONFIRMED) {
             open_media();
         }
@@ -161,35 +161,35 @@ void SipCall::onCallState(pj::OnCallStateParam& prm) {
             app_.handle_call_disconnected(getId());
         }
     } catch (const std::exception& ex) {
-        logging::get_logger()->error(with_kv(
+        logging::error(
             "Call state handler exception",
-            {kv("error", ex.what())}));
+            {kv("error", ex.what())});
     }
 }
 
 void SipCall::onCallMediaState(pj::OnCallMediaStateParam& prm) {
     (void)prm;
     try {
-        logging::get_logger()->debug(with_kv(
+        logging::debug(
             "Call media state changed",
-            {kv("session_id", session_id_.value_or(""))}));
+            {kv("session_id", session_id_.value_or(""))});
         if (!media_active_) {
             open_media();
         }
     } catch (const std::exception& ex) {
-        logging::get_logger()->error(with_kv(
+        logging::error(
             "Call media handler exception",
-            {kv("error", ex.what())}));
+            {kv("error", ex.what())});
     }
 }
 
 void SipCall::onCallTransferStatus(pj::OnCallTransferStatusParam& prm) {
-    logging::get_logger()->info(with_kv(
+    logging::info(
         "Transfer status",
         {kv("status", prm.statusCode),
          kv("reason", prm.reason),
          kv("final_notify", prm.finalNotify),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
     if (prm.finalNotify) {
         if (prm.statusCode >= 200 && prm.statusCode < 300) {
             hangup(PJSIP_SC_OK);
@@ -202,15 +202,14 @@ void SipCall::open_media() {
     if (media_active_) {
         return;
     }
-    auto logger = logging::get_logger();
     try {
         audio_media_ = std::make_unique<pj::AudioMedia>(getAudioMedia(-1));
     } catch (const pj::Error& ex) {
-        logger->error(with_kv(
+        logging::error(
             "Call media not available",
             {kv("reason", ex.reason),
              kv("status", ex.status),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
         return;
     }
 
@@ -229,11 +228,10 @@ void SipCall::open_media() {
     try {
         audio_media_->startTransmit(*media_port_);
     } catch (const pj::Error& ex) {
-        logger->error(with_kv(
-            "Failed to attach media port",
-            {kv("reason", ex.reason),
-             kv("status", ex.status),
-             kv("session_id", session_id_.value_or(""))}));
+        logging::error("Failed to attach media port",
+                       {kv("reason", ex.reason),
+                        kv("status", ex.status),
+                        kv("session_id", session_id_.value_or(""))});
     }
 
     if (app_.config().record_audio_parts) {
@@ -246,11 +244,10 @@ void SipCall::open_media() {
                 audio_media_->startTransmit(*recorder_media);
             }
         } catch (const std::exception& ex) {
-            logger->error(with_kv(
-                "Failed to start call recorder",
-                {kv("error", ex.what()),
-                 kv("filename", filename.string()),
-                 kv("session_id", session_id_.value_or(""))}));
+            logging::error("Failed to start call recorder",
+                           {kv("error", ex.what()),
+                            kv("filename", filename.string()),
+                            kv("session_id", session_id_.value_or(""))});
             recorder_.reset();
         }
     }
@@ -259,10 +256,9 @@ void SipCall::open_media() {
     player_ = std::make_unique<audio::SmartPlayer>(
         *audio_media_,
         recorder_media,
-        [this, logger, session_id = session_id_.value_or("")]() {
-            logger->debug(with_kv(
-                "Audio playback finished",
-                {kv("session_id", session_id)}));
+        [this, session_id = session_id_.value_or("")]() {
+            logging::debug("Audio playback finished",
+                           {kv("session_id", session_id)});
             handle_playback_finished();
         });
     if (!vad_processor_) {
@@ -359,12 +355,11 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
                                   double start,
                                   double duration) {
     (void)audio;
-    auto logger = logging::get_logger();
-    logger->debug(with_kv(
+    logging::debug(
         "VAD speech start",
         {kv("start_sec", start),
          kv("duration_sec", duration),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 
     user_speaking_ = true;
     if (player_) {
@@ -388,10 +383,10 @@ void SipCall::on_vad_speech_start(const std::vector<float>& audio,
         try {
             rollback_session();
         } catch (const std::exception& ex) {
-            logging::get_logger()->warn(with_kv(
+            logging::warn(
                 "Rollback failed",
                 {kv("error", ex.what()),
-                 kv("session_id", session_id_.value_or(""))}));
+                 kv("session_id", session_id_.value_or(""))});
         }
     });
 }
@@ -400,11 +395,11 @@ void SipCall::on_vad_speech_end(const std::vector<float>& audio,
                                 double start,
                                 double duration) {
     (void)audio;
-    logging::get_logger()->debug(with_kv(
+    logging::debug(
         "VAD speech end",
         {kv("start_sec", start),
          kv("duration_sec", duration),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
     user_speaking_ = false;
 }
 
@@ -412,13 +407,12 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                                  double start,
                                  double duration) {
     if (duration < 2.5) {
-        logging::get_logger()->debug(with_kv(
+        logging::debug(
             "Short pause ignored (speech too short)",
             {kv("duration_sec", duration),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
         return;
     }
-    auto logger = logging::get_logger();
     {
         std::lock_guard<std::mutex> lock(generation_mutex_);
         if (start_in_flight_ || commit_in_flight_ || start_sent_) {
@@ -426,11 +420,11 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
         }
         start_in_flight_ = true;
     }
-    logger->debug(with_kv(
+    logging::debug(
         "VAD short pause",
         {kv("start_sec", start),
          kv("duration_sec", duration),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 
     auto audio_copy = audio;
     utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
@@ -439,9 +433,9 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
             const auto text = transcribe_audio(audio_copy);
             if (!text.empty()) {
                 if (is_same_unstable_text(text)) {
-                    logging::get_logger()->debug(with_kv(
+                    logging::debug(
                         "Speculation skipped (text unchanged)",
-                        {kv("session_id", session_id_.value_or(""))}));
+                        {kv("session_id", session_id_.value_or(""))});
                     return;
                 }
                 clear_pending_tts();
@@ -455,10 +449,10 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                 set_state(CallState::SpeculativeGenerate);
             }
         } catch (const std::exception& ex) {
-            logging::get_logger()->error(with_kv(
+            logging::error(
                 "Short pause handling failed",
                 {kv("error", ex.what()),
-                 kv("session_id", session_id_.value_or(""))}));
+                 kv("session_id", session_id_.value_or(""))});
         }
         std::lock_guard<std::mutex> lock(generation_mutex_);
         start_in_flight_ = false;
@@ -468,11 +462,10 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
 void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                                 double start,
                                 double duration) {
-    auto logger = logging::get_logger();
     if (audio.empty()) {
-        logger->debug(with_kv(
+        logging::debug(
             "Long pause ignored (empty buffer)",
-            {kv("session_id", session_id_.value_or(""))}));
+            {kv("session_id", session_id_.value_or(""))});
         return;
     }
     {
@@ -482,11 +475,11 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
         }
         commit_in_flight_ = true;
     }
-    logger->debug(with_kv(
+    logging::debug(
         "VAD long pause",
         {kv("start_sec", start),
          kv("duration_sec", duration),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 
     auto audio_copy = audio;
     utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
@@ -527,10 +520,10 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
             std::lock_guard<std::mutex> lock(generation_mutex_);
             start_sent_ = false;
         } catch (const std::exception& ex) {
-            logging::get_logger()->error(with_kv(
+            logging::error(
                 "Long pause handling failed",
                 {kv("error", ex.what()),
-                 kv("session_id", session_id_.value_or(""))}));
+                 kv("session_id", session_id_.value_or(""))});
         }
         std::lock_guard<std::mutex> lock(generation_mutex_);
         commit_in_flight_ = false;
@@ -541,10 +534,10 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
 }
 
 void SipCall::on_vad_user_silence_timeout(double current_time) {
-    logging::get_logger()->debug(with_kv(
+    logging::debug(
         "VAD user silence timeout",
         {kv("time_sec", current_time),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
     finished_ = true;
     set_state(CallState::Finished);
     handle_playback_finished();
@@ -652,10 +645,10 @@ void SipCall::commit_session() {
             handle_playback_finished();
         }
     } catch (const std::exception& ex) {
-        logging::get_logger()->error(with_kv(
+        logging::error(
             "Commit failed",
             {kv("error", ex.what()),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
         set_state(CallState::WaitForUser);
     }
     last_unstable_transcription_.clear();
@@ -772,11 +765,11 @@ bool SipCall::start_transfer() {
         target = *transfer_target_;
         delay_sec = transfer_delay_sec_;
     }
-    logging::get_logger()->info(with_kv(
+    logging::info(
         "Transfer initiated",
         {kv("to_uri", target),
          kv("delay_sec", delay_sec),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 
     if (target.rfind("dtmf:", 0) == 0) {
         const auto digits = target.substr(5);
@@ -784,11 +777,11 @@ bool SipCall::start_transfer() {
             try {
                 dialDtmf(digits);
             } catch (const pj::Error& ex) {
-                logging::get_logger()->error(with_kv(
+                logging::error(
                     "DTMF transfer failed",
                     {kv("reason", ex.reason),
                      kv("status", ex.status),
-                     kv("session_id", session_id_.value_or(""))}));
+                     kv("session_id", session_id_.value_or(""))});
             }
         }
         utils::run_async([this, delay_sec]() {
@@ -805,11 +798,11 @@ bool SipCall::start_transfer() {
     try {
         xfer(target, prm);
     } catch (const pj::Error& ex) {
-        logging::get_logger()->error(with_kv(
+        logging::error(
             "Transfer failed",
             {kv("reason", ex.reason),
              kv("status", ex.status),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
         return false;
     }
     return true;
@@ -835,18 +828,18 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         return;
     }
     if (!session_id_) {
-        logging::get_logger()->warn(with_kv(
+        logging::warn(
             "TTS skipped: session_id missing",
-            {kv("text", text)}));
+            {kv("text", text)});
         return;
     }
     try {
         const auto blob = app_.synthesize_session_audio(*session_id_, text);
         if (blob.size() < 364) {
-            logging::get_logger()->info(with_kv(
+            logging::info(
                 "TTS audio too short",
                 {kv("blob_size", static_cast<int>(blob.size())),
-                 kv("session_id", *session_id_)}));
+                 kv("session_id", *session_id_)});
             return;
         }
         const auto filename = make_tts_path();
@@ -861,10 +854,10 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
             vad_processor_->reset_user_salience();
         }
     } catch (const std::exception& ex) {
-        logging::get_logger()->error(with_kv(
+        logging::error(
             "TTS synthesize failed",
             {kv("error", ex.what()),
-             kv("session_id", session_id_.value_or(""))}));
+             kv("session_id", session_id_.value_or(""))});
     }
 }
 
@@ -902,10 +895,10 @@ void SipCall::set_state(CallState state) {
             name = "FINISHED";
             break;
     }
-    logging::get_logger()->debug(with_kv(
+    logging::debug(
         "Call state change",
         {kv("state", name),
-         kv("session_id", session_id_.value_or(""))}));
+         kv("session_id", session_id_.value_or(""))});
 }
 
 std::filesystem::path SipCall::make_tts_path() const {

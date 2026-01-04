@@ -8,8 +8,7 @@
 namespace sip_gateway {
 namespace audio {
 
-CallRecorder::CallRecorder()
-    : logger_(logging::get_logger()) {}
+CallRecorder::CallRecorder() = default;
 
 CallRecorder::~CallRecorder() {
     stop_recording();

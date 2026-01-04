@@ -7,8 +7,6 @@
 #include <optional>
 
 #include <pjsua2.hpp>
-#include "spdlog/logger.h"
-
 namespace sip_gateway {
 namespace audio {
 
@@ -34,7 +32,6 @@ public:
 private:
     std::deque<AudioFile> queue_;
     std::function<void()> on_stop_callback_;
-    std::shared_ptr<spdlog::logger> logger_;
     bool active_ = false;
     bool tearing_down_ = false;
     std::optional<AudioFile> current_audio_;
