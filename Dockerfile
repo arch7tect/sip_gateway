@@ -7,6 +7,7 @@ RUN apt-get update && \
         pkg-config \
         ca-certificates \
         git \
+        ninja-build \
         libasound2-dev \
         libavcodec-dev \
         libavdevice-dev \
@@ -35,9 +36,9 @@ RUN arch="$(dpkg --print-architecture)" && \
 WORKDIR /app
 COPY . /app
 
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build --target pjproject-install && \
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && \
+    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build
 
 FROM ubuntu:24.04

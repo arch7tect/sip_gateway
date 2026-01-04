@@ -16,6 +16,7 @@ set(SIPGATEWAY_WARNINGS
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dependencies)
 include(FetchContent)
+find_package(OpenSSL)
 
 if(NOT TARGET pjsip)
     message(FATAL_ERROR "PJSIP is required. Ensure SIPGATEWAY_BUILD_PJSIP is enabled.")
@@ -25,6 +26,8 @@ add_executable(sip_gateway
     src/main.cpp
     src/config.cpp
     src/logging.cpp
+    src/backend/client.cpp
+    src/backend/ws_client.cpp
     src/audio/port.cpp
     src/audio/player.cpp
     src/audio/recorder.cpp
@@ -32,6 +35,8 @@ add_executable(sip_gateway
     src/sip/app.cpp
     include/sip_gateway/config.hpp
     include/sip_gateway/logging.hpp
+    include/sip_gateway/backend/client.hpp
+    include/sip_gateway/backend/ws_client.hpp
     include/sip_gateway/audio/port.hpp
     include/sip_gateway/audio/player.hpp
     include/sip_gateway/audio/recorder.hpp
@@ -51,6 +56,17 @@ if(TARGET nlohmann_json::nlohmann_json)
 endif()
 if(TARGET httplib::httplib)
     target_link_libraries(sip_gateway PRIVATE httplib::httplib)
+endif()
+if(OpenSSL_FOUND)
+    target_link_libraries(sip_gateway PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(sip_gateway PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+if(TARGET websocketpp)
+    target_link_libraries(sip_gateway PRIVATE websocketpp)
+endif()
+if(TARGET asio)
+    target_link_libraries(sip_gateway PRIVATE asio)
+    target_compile_definitions(sip_gateway PRIVATE ASIO_STANDALONE)
 endif()
 target_link_libraries(sip_gateway PRIVATE pjsip)
 if(TARGET pjproject)

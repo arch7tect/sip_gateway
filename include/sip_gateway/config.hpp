@@ -69,7 +69,7 @@ struct Config {
     std::string session_type = "inbound";
     bool is_streaming = false;
     bool show_waiting_messages = false;
-    std::string log_name = "__main__";
+    std::string log_name = "sip_gateway";
 
     static Config load();
     void validate() const;

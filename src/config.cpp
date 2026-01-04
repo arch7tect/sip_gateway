@@ -270,7 +270,7 @@ Config Config::load() {
                           streaming_flag;
     config.show_waiting_messages = get_env_bool("SHOW_WAITING_MESSAGES", false);
 
-    config.log_name = get_env_str("LOG_NAME", "__main__");
+    config.log_name = get_env_str("LOG_NAME", "sip_gateway");
 
     return config;
 }

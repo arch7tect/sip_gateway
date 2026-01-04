@@ -47,7 +47,18 @@ if(SIPGATEWAY_FETCH_DEPS)
         GIT_TAG v3.5.4
     )
 
-    FetchContent_MakeAvailable(spdlog nlohmann_json httplib Catch2)
+    FetchContent_Declare(
+        asio
+        GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+        GIT_TAG asio-1-30-2
+    )
+
+    FetchContent_MakeAvailable(spdlog nlohmann_json httplib Catch2 asio)
+
+    if(asio_POPULATED)
+        add_library(asio INTERFACE)
+        target_include_directories(asio INTERFACE ${asio_SOURCE_DIR}/asio/include)
+    endif()
 endif()
 
 if(SIPGATEWAY_BUILD_PJSIP OR SIPGATEWAY_BUILD_ONNX OR SIPGATEWAY_BUILD_OPUS OR SIPGATEWAY_FETCH_DEPS)
@@ -271,5 +282,6 @@ if(SIPGATEWAY_FETCH_DEPS)
     )
     ExternalProject_Get_Property(websocketpp_ep SOURCE_DIR)
     add_library(websocketpp INTERFACE)
+    add_dependencies(websocketpp websocketpp_ep)
     target_include_directories(websocketpp INTERFACE ${SOURCE_DIR})
 endif()

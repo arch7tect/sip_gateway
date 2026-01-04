@@ -5,7 +5,7 @@ Compatibility means identical environment variable names and precedence rules.
 Defaults must match the Python service or be documented as deviations.
 
 ## Precedence Rules
-- Load `.env` via a C++ dotenv reader (override enabled), then apply OS environment with override enabled.
+- Load `.env` with override enabled (matches Python `dotenv.load_dotenv(override=True)`), so `.env` values override OS environment variables.
 - Code defaults apply only when a variable is absent after env and dotenv resolution.
 - Derived defaults are computed from other resolved values (for example, `SIP_AUDIO_TMP_DIR` and `SIP_AUDIO_WAV_DIR` use `SIP_AUDIO_DIR` or `os.getcwd()`).
 
@@ -86,15 +86,14 @@ Defaults must match the Python service or be documented as deviations.
 - `BACKEND_URL`: required (no default; accessed via `os.environ["BACKEND_URL"]`)
 - `REWRITE_ROOT`: `true`
 - `VAD_USE_DYNAMIC_CORRECTIONS`: `true`
-- `LOG_NAME`: defaults to `__name__`
+- `LOG_NAME`: defaults to `__name__` in Python; C++ uses `sip_gateway` (intentional deviation, see below).
 
 ## Equivalent Behavior
 - Variables that differ internally but yield the same external behavior.
 - Include rationale and test coverage.
 
 ## Intentional Deviations
-- Variables or defaults that differ from Python behavior.
-- Provide explicit rationale and migration impact.
+- `LOG_NAME`: C++ default is `sip_gateway` since there is no module `__name__` equivalent; behavior is otherwise identical when the env var is set.
 
 ## Validation Plan
 - Source-of-truth references (Python code paths).

@@ -1,10 +1,10 @@
 # Backend API Contract
 
 ## Status
-- Owner: TBD
-- Version: TBD
-- Freeze date: TBD
-- Source of truth: Python implementation in this repo (see Source References).
+- Owner: sip-gateway team
+- Version: 0.1 (extracted from Python sources)
+- Freeze date: 2025-01-03
+- Source of truth: Python implementation in `python/` (see Source References). This document is an extraction.
 
 ## REST Endpoints (Backend)
 - Session lifecycle:
@@ -65,12 +65,13 @@
 ## WebSocket Contract
 - URL: `/ws/{session_id}` (JSON messages).
 - Client expects a JSON `type` field; `timeout` and `close` trigger session handlers, others are forwarded to `ws_message`.
-- Heartbeat/ping behavior is not defined here and must be specified in the backend contract.
+- Heartbeat/ping: none in Python. The client does not send pings; it just reads messages until the socket closes.
+- Reconnect: client reconnects in a loop with a fixed 5-second delay after disconnect.
 
 ## Errors and Retries
 - Backend client treats non-2xx as errors; 403 raises `PermissionError`, other statuses raise `RuntimeError`.
 - Error responses are expected to include `{ "message": "..." }` when possible.
-- Retry semantics are not defined in code and must be specified in the backend contract.
+- Retry semantics: fixed 5-second reconnect loop for WebSocket; REST requests do not retry.
 
 ## Versioning
 - Backward compatibility policy and deprecation rules: TBD.
