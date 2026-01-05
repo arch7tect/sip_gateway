@@ -101,9 +101,9 @@ private:
     bool transfer_started_ = false;
     std::optional<std::string> close_status_;
     std::mutex transfer_mutex_;
-    std::atomic<bool> media_active_ = false;
-    bool user_speaking_ = false;
-    bool soft_hangup_pending_ = false;
+    std::atomic<bool> media_active_ = false; // Media is attached and active.
+    bool user_speaking_ = false; // VAD currently reports user speech.
+    bool soft_hangup_pending_ = false; // Hangup timer scheduled.
     std::string last_unstable_transcription_;
     std::optional<std::chrono::steady_clock::time_point> start_reply_generation_;
     std::optional<std::chrono::steady_clock::time_point> start_response_generation_;
@@ -114,12 +114,12 @@ private:
     std::unique_ptr<TtsPipeline> tts_pipeline_;
     std::unique_ptr<vad::StreamingVadProcessor> vad_processor_;
     std::mutex generation_mutex_;
-    bool start_in_flight_ = false;
-    bool commit_in_flight_ = false;
-    bool spec_active_ = false;
-    bool short_pause_handled_ = false;
-    bool long_pause_handled_ = false;
-    bool finished_ = false;
+    bool start_in_flight_ = false; // Speculative start request in progress.
+    bool commit_in_flight_ = false; // Commit request in progress.
+    bool spec_active_ = false; // Speculative session is active.
+    bool short_pause_handled_ = false; // Short pause already processed.
+    bool long_pause_handled_ = false; // Long pause already processed.
+    bool finished_ = false; // Backend indicates session end.
     CallState state_ = CallState::WaitForUser;
 };
 

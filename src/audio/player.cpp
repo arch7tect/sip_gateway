@@ -107,8 +107,11 @@ void SmartPlayer::handle_eof() {
     discard_current();
     if (!queue_.empty() && !tearing_down_) {
         play_next();
-    } else if (on_stop_callback_ && !tearing_down_) {
-        on_stop_callback_();
+    } else if (!tearing_down_) {
+        active_ = false;
+        if (on_stop_callback_) {
+            on_stop_callback_();
+        }
     }
 }
 
