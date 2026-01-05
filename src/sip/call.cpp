@@ -999,6 +999,10 @@ void SipCall::try_play_tts() {
         if (!audio_path || audio_path->empty()) {
             continue;
         }
+        logging::debug(
+            "TTS ready for playback",
+            {kv("text", task.text),
+             kv("session_id", session_id_.value_or(""))});
         player_->enqueue(*audio_path, true);
         player_->play();
         if (vad_processor_) {
