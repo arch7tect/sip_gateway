@@ -1,9 +1,7 @@
 #pragma once
 
 #include <chrono>
-#include <functional>
 #include <httplib.h>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -30,9 +28,9 @@ struct BackendRequestOptions {
 
 class BackendClient {
 public:
-    BackendClient(std::string base_url,
+    BackendClient(const std::string& base_url,
                   std::optional<std::string> authorization_token,
-                  BackendRequestOptions options);
+                  const BackendRequestOptions& options);
 
     nlohmann::json get_json(const std::string& path);
     nlohmann::json post_json(const std::string& path, const nlohmann::json& body);

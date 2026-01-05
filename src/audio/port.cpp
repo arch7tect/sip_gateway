@@ -1,12 +1,11 @@
 #include "sip_gateway/audio/port.hpp"
 
 #include <algorithm>
-#include <cstring>
 
 #include "sip_gateway/utils/async.hpp"
 
-namespace sip_gateway {
-namespace audio {
+
+namespace sip_gateway::audio {
 
 AudioMediaPort::AudioMediaPort() {
     worker_ = std::thread([this]() { worker_loop(); });
@@ -103,4 +102,4 @@ void AudioMediaPort::worker_loop() {
 }
 
 }
-}
+
