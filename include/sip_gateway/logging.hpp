@@ -27,7 +27,7 @@ inline std::string format_kv(std::initializer_list<KeyValue> items) {
     std::string result;
     for (const auto& item : items) {
         if (!result.empty()) {
-            result += ", ";
+            result += " ";
         }
         bool needs_quotes = item.value.find(' ') != std::string::npos;
         result += item.key;

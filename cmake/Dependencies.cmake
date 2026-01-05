@@ -155,12 +155,15 @@ if(SIPGATEWAY_BUILD_PJSIP)
     ExternalProject_Add(
         pjproject
         URL https://github.com/pjsip/pjproject/archive/refs/tags/${SIPGATEWAY_PJSIP_VERSION}.tar.gz
+        PATCH_COMMAND ${CMAKE_COMMAND}
+            -E copy_if_different
+            ${CMAKE_CURRENT_LIST_DIR}/pjsip_config_site.h
+            <SOURCE_DIR>/pjlib/include/pj/config_site.h
         CONFIGURE_COMMAND ${_SIPGATEWAY_PJSIP_CONFIGURE_COMMAND}
             --prefix=<INSTALL_DIR>
             --with-opus=${SIPGATEWAY_OPUS_PREFIX}
             --enable-ssl
             --with-ssl=${SIPGATEWAY_OPENSSL_PREFIX}
-            --with-config-site=${CMAKE_CURRENT_LIST_DIR}/pjsip_config_site.h
             --disable-shared
         BUILD_COMMAND make -j4
         INSTALL_COMMAND
