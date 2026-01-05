@@ -484,10 +484,11 @@ void SipCall::on_vad_speech_end(const std::vector<float>& audio,
 void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                                  double start,
                                  double duration) {
-    if (duration < 2.5) {
+    if (duration < app_.config().min_speech_duration_sec) {
         logging::debug(
             "Short pause ignored (speech too short)",
             {kv("duration_sec", duration),
+             kv("min_required_sec", app_.config().min_speech_duration_sec),
              kv("session_id", session_id_.value_or(""))});
         return;
     }
@@ -507,6 +508,14 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
     auto audio_copy = audio;
     utils::run_async([this, audio_copy = std::move(audio_copy)]() mutable {
         try {
+            if (!media_active_.load()) {
+                logging::debug(
+                    "Short pause skipped (call disconnected)",
+                    {kv("session_id", session_id_.value_or(""))});
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                start_in_flight_ = false;
+                return;
+            }
             rollback_session();
             const auto text = transcribe_audio(audio_copy);
             if (!text.empty()) {
@@ -514,6 +523,16 @@ void SipCall::on_vad_short_pause(const std::vector<float>& audio,
                     logging::debug(
                         "Speculation skipped (text unchanged)",
                         {kv("session_id", session_id_.value_or(""))});
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    start_in_flight_ = false;
+                    return;
+                }
+                if (!media_active_.load()) {
+                    logging::debug(
+                        "Backend start skipped (call disconnected)",
+                        {kv("session_id", session_id_.value_or(""))});
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    start_in_flight_ = false;
                     return;
                 }
                 start_session_text(text);
@@ -561,6 +580,18 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
             vad_processor_->set_long_pause_suspended(true);
         }
         try {
+            if (!media_active_.load()) {
+                logging::debug(
+                    "Long pause skipped (call disconnected)",
+                    {kv("session_id", session_id_.value_or(""))});
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                commit_in_flight_ = false;
+                if (vad_processor_) {
+                    vad_processor_->set_long_pause_suspended(false);
+                }
+                return;
+            }
+
             for (int i = 0; i < 200; ++i) {
                 {
                     std::lock_guard<std::mutex> lock(generation_mutex_);
@@ -569,6 +600,18 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            if (!media_active_.load()) {
+                logging::debug(
+                    "Long pause skipped (call disconnected)",
+                    {kv("session_id", session_id_.value_or(""))});
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                commit_in_flight_ = false;
+                if (vad_processor_) {
+                    vad_processor_->set_long_pause_suspended(false);
+                }
+                return;
             }
 
             bool has_start = false;
@@ -581,6 +624,20 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                 if (text.empty()) {
                     std::lock_guard<std::mutex> lock(generation_mutex_);
                     commit_in_flight_ = false;
+                    if (vad_processor_) {
+                        vad_processor_->set_long_pause_suspended(false);
+                    }
+                    return;
+                }
+                if (!media_active_.load()) {
+                    logging::debug(
+                        "Backend start skipped (call disconnected)",
+                        {kv("session_id", session_id_.value_or(""))});
+                    std::lock_guard<std::mutex> lock(generation_mutex_);
+                    commit_in_flight_ = false;
+                    if (vad_processor_) {
+                        vad_processor_->set_long_pause_suspended(false);
+                    }
                     return;
                 }
                 start_session_text(text);
@@ -588,6 +645,17 @@ void SipCall::on_vad_long_pause(const std::vector<float>& audio,
                 spec_active_ = true;
                 short_pause_handled_ = true;
                 set_state(CallState::SpeculativeGenerate);
+            }
+            if (!media_active_.load()) {
+                logging::debug(
+                    "Backend commit skipped (call disconnected)",
+                    {kv("session_id", session_id_.value_or(""))});
+                std::lock_guard<std::mutex> lock(generation_mutex_);
+                commit_in_flight_ = false;
+                if (vad_processor_) {
+                    vad_processor_->set_long_pause_suspended(false);
+                }
+                return;
             }
             set_state(CallState::CommitGenerate);
             user_speaking_ = false;

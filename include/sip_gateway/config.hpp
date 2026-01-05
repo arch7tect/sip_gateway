@@ -50,6 +50,7 @@ struct Config {
     int short_pause_offset_ms = 200;
     int long_pause_offset_ms = 850;
     int user_silence_timeout_ms = 60000;
+    double min_speech_duration_sec = 1.5;
     int call_connection_timeout = 10;
     int sip_rest_api_port = 8000;
     bool use_local_stt = false;

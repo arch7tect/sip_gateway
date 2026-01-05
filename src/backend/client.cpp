@@ -55,14 +55,25 @@ BackendClient::BackendClient(std::string base_url,
     : authorization_token_(std::move(authorization_token)),
       options_(options) {
     parse_url(base_url, scheme_, host_, port_, base_path_);
+}
 
-    if (scheme_ == "https") {
-        client_https_ = std::make_unique<httplib::SSLClient>(host_, port_);
-        client_https_->enable_server_certificate_verification(false);
-    } else {
-        client_http_ = std::make_unique<httplib::Client>(host_, port_);
+httplib::Client* BackendClient::get_client() {
+    thread_local std::unique_ptr<httplib::Client> client;
+    if (!client) {
+        client = std::make_unique<httplib::Client>(host_, port_);
+        apply_timeouts(*client);
     }
-    apply_timeouts();
+    return client.get();
+}
+
+httplib::SSLClient* BackendClient::get_ssl_client() {
+    thread_local std::unique_ptr<httplib::SSLClient> client;
+    if (!client) {
+        client = std::make_unique<httplib::SSLClient>(host_, port_);
+        client->enable_server_certificate_verification(false);
+        apply_timeouts(*client);
+    }
+    return client.get();
 }
 
 nlohmann::json BackendClient::get_json(const std::string& path) {
@@ -71,9 +82,9 @@ nlohmann::json BackendClient::get_json(const std::string& path) {
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
-    auto response = client_https_
-                        ? client_https_->Get(build_path(path).c_str(), headers)
-                        : client_http_->Get(build_path(path).c_str(), headers);
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Get(build_path(path).c_str(), headers)
+                        : get_client()->Get(build_path(path).c_str(), headers);
     if (!response) {
         throw BackendError("Backend request failed");
     }
@@ -93,10 +104,10 @@ nlohmann::json BackendClient::post_json(const std::string& path, const nlohmann:
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
-    auto response = client_https_
-                        ? client_https_->Post(build_path(path).c_str(), headers, body.dump(),
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Post(build_path(path).c_str(), headers, body.dump(),
                                               "application/json")
-                        : client_http_->Post(build_path(path).c_str(), headers, body.dump(),
+                        : get_client()->Post(build_path(path).c_str(), headers, body.dump(),
                                              "application/json");
     if (!response) {
         throw BackendError("Backend request failed");
@@ -120,9 +131,9 @@ nlohmann::json BackendClient::post_multipart_json(const std::string& path,
     }
     httplib::MultipartFormDataItems items;
     items.push_back({field_name, body.dump(), "", "application/json"});
-    auto response = client_https_
-                        ? client_https_->Post(build_path(path).c_str(), headers, items)
-                        : client_http_->Post(build_path(path).c_str(), headers, items);
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Post(build_path(path).c_str(), headers, items)
+                        : get_client()->Post(build_path(path).c_str(), headers, items);
     if (!response) {
         throw BackendError("Backend request failed");
     }
@@ -142,10 +153,10 @@ nlohmann::json BackendClient::put_json(const std::string& path, const nlohmann::
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
-    auto response = client_https_
-                        ? client_https_->Put(build_path(path).c_str(), headers, body.dump(),
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Put(build_path(path).c_str(), headers, body.dump(),
                                              "application/json")
-                        : client_http_->Put(build_path(path).c_str(), headers, body.dump(),
+                        : get_client()->Put(build_path(path).c_str(), headers, body.dump(),
                                             "application/json");
     if (!response) {
         throw BackendError("Backend request failed");
@@ -165,9 +176,9 @@ nlohmann::json BackendClient::delete_json(const std::string& path) {
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
-    auto response = client_https_
-                        ? client_https_->Delete(build_path(path).c_str(), headers)
-                        : client_http_->Delete(build_path(path).c_str(), headers);
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Delete(build_path(path).c_str(), headers)
+                        : get_client()->Delete(build_path(path).c_str(), headers);
     if (!response) {
         throw BackendError("Backend request failed");
     }
@@ -189,10 +200,10 @@ nlohmann::json BackendClient::post_binary(const std::string& path,
     if (authorization_token_) {
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
-    auto response = client_https_
-                        ? client_https_->Post(build_path(path).c_str(), headers, payload,
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Post(build_path(path).c_str(), headers, payload,
                                               content_type)
-                        : client_http_->Post(build_path(path).c_str(), headers, payload,
+                        : get_client()->Post(build_path(path).c_str(), headers, payload,
                                              content_type);
     if (!response) {
         throw BackendError("Backend request failed");
@@ -213,9 +224,9 @@ std::string BackendClient::get_binary(const std::string& path, const std::string
         headers.emplace("Authorization", "Bearer " + *authorization_token_);
     }
     const auto full_path = build_path(path) + "?" + query;
-    auto response = client_https_
-                        ? client_https_->Get(full_path.c_str(), headers)
-                        : client_http_->Get(full_path.c_str(), headers);
+    auto response = scheme_ == "https"
+                        ? get_ssl_client()->Get(full_path.c_str(), headers)
+                        : get_client()->Get(full_path.c_str(), headers);
     if (!response) {
         throw BackendError("Backend request failed");
     }
@@ -242,21 +253,6 @@ std::string BackendClient::build_path(const std::string& path) const {
         return base_path_ + "/" + path;
     }
     return base_path_ + path;
-}
-
-void BackendClient::apply_timeouts() {
-    if (client_https_) {
-        client_https_->set_connection_timeout(options_.connect_timeout.count(), 0);
-        client_https_->set_read_timeout(options_.sock_read_timeout.count(), 0);
-        client_https_->set_write_timeout(options_.request_timeout.count(), 0);
-        return;
-    }
-    if (client_http_) {
-        client_http_->set_connection_timeout(options_.connect_timeout.count(), 0);
-        client_http_->set_read_timeout(options_.sock_read_timeout.count(), 0);
-        client_http_->set_write_timeout(options_.request_timeout.count(), 0);
-        return;
-    }
 }
 
 }

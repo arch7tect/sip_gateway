@@ -48,15 +48,20 @@ public:
 
 private:
     std::string build_path(const std::string& path) const;
-    void apply_timeouts();
+    template<typename T>
+    void apply_timeouts(T& client) const {
+        client.set_connection_timeout(options_.connect_timeout.count(), 0);
+        client.set_read_timeout(options_.sock_read_timeout.count(), 0);
+        client.set_write_timeout(options_.request_timeout.count(), 0);
+    }
+    httplib::Client* get_client();
+    httplib::SSLClient* get_ssl_client();
     std::string scheme_;
     std::string host_;
     int port_;
     std::string base_path_;
     std::optional<std::string> authorization_token_;
     BackendRequestOptions options_;
-    std::unique_ptr<httplib::Client> client_http_;
-    std::unique_ptr<httplib::SSLClient> client_https_;
 };
 
 }

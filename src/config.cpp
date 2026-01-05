@@ -240,6 +240,7 @@ Config Config::load() {
     config.short_pause_offset_ms = get_env_int("SHORT_PAUSE_OFFSET_MS", 200);
     config.long_pause_offset_ms = get_env_int("LONG_PAUSE_OFFSET_MS", 850);
     config.user_silence_timeout_ms = get_env_int("USER_SILENCE_TIMEOUT_MS", 60000);
+    config.min_speech_duration_sec = get_env_double("MIN_SPEECH_DURATION_SEC", 1.5);
 
     config.call_connection_timeout = get_env_int("CALL_CONNECTION_TIMEOUT", 10);
     config.sip_rest_api_port = get_env_int("SIP_REST_API_PORT", 8000);
