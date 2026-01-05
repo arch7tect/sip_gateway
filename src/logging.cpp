@@ -9,8 +9,8 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 
-namespace sip_gateway {
-namespace logging {
+
+namespace sip_gateway::logging {
 
 namespace {
 
@@ -55,4 +55,4 @@ std::shared_ptr<spdlog::logger> get_logger() {
 }
 
 }
-}
+

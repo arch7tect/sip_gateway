@@ -6,8 +6,8 @@
 
 #include <onnxruntime_cxx_api.h>
 
-namespace sip_gateway {
-namespace vad {
+
+namespace sip_gateway::vad {
 
 namespace {
 
@@ -166,4 +166,4 @@ float VadModel::get_speech_prob(const std::vector<float>& audio,
 }
 
 }
-}
+

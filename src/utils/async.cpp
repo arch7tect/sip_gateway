@@ -3,8 +3,8 @@
 #include <pj/os.h>
 #include <thread>
 
-namespace sip_gateway {
-namespace utils {
+
+namespace sip_gateway::utils {
 
 void ensure_pj_thread_registered(const char* name) {
     if (pj_thread_is_registered()) {
@@ -24,4 +24,4 @@ void run_async(std::function<void()> task) {
 }
 
 }
-}
+

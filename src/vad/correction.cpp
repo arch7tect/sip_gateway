@@ -6,8 +6,8 @@
 
 #include "sip_gateway/logging.hpp"
 
-namespace sip_gateway {
-namespace vad {
+
+namespace sip_gateway::vad {
 
 namespace {
 
@@ -226,4 +226,4 @@ bool DynamicCorrection::process_frame(double speech_prob, double frame_energy) {
 }
 
 }
-}
+

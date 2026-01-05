@@ -273,6 +273,7 @@ Config Config::load() {
     config.is_streaming = config.session_type != "inbound" && config.session_type != "outbound" &&
                           streaming_flag;
     config.show_waiting_messages = get_env_bool("SHOW_WAITING_MESSAGES", false);
+    config.allow_inbound_calls = get_env_bool("ALLOW_INBOUND_CALLS", true);
 
     config.log_name = get_env_str("LOG_NAME", "sip_gateway");
     config.tts_max_inflight = get_env_int("TTS_MAX_INFLIGHT", 3);

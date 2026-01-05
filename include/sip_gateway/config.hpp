@@ -72,6 +72,7 @@ struct Config {
     double backend_sock_read_timeout = 60.0;
     std::string session_type = "inbound";
     bool is_streaming = false;
+    bool allow_inbound_calls = true;
     bool show_waiting_messages = false;
     std::string log_name = "sip_gateway";
     int tts_max_inflight = 2;

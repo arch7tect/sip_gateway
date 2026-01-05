@@ -7,8 +7,8 @@
 
 #include "sip_gateway/vad/model.hpp"
 
-namespace sip_gateway {
-namespace vad {
+
+namespace sip_gateway::vad {
 
 StreamingVadProcessor::StreamingVadProcessor(std::shared_ptr<VadModel> model,
                                              float threshold,
@@ -350,4 +350,4 @@ void StreamingVadProcessor::times_sec(const std::vector<float>& audio,
 }
 
 }
-}
+

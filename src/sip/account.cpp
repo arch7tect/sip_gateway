@@ -45,6 +45,15 @@ void SipAccount::onRegState(pj::OnRegStateParam& prm) {
 }
 
 void SipAccount::onIncomingCall(pj::OnIncomingCallParam& iprm) {
+    if (!app_.config().allow_inbound_calls) {
+        logging::info(
+            "Inbound call rejected (disabled)",
+            {kv("call_id", iprm.callId)});
+        auto call = std::make_shared<SipCall>(app_, *this, app_.backend_url(), iprm.callId);
+        call->hangup(PJSIP_SC_FORBIDDEN);
+        return;
+    }
+
     logging::info(
         "Incoming call",
         {kv("call_id", iprm.callId)});
