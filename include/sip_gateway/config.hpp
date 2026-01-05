@@ -73,6 +73,7 @@ struct Config {
     bool is_streaming = false;
     bool show_waiting_messages = false;
     std::string log_name = "sip_gateway";
+    int tts_max_inflight = 2;
 
     static Config load();
     void validate() const;

@@ -1,9 +1,7 @@
 #pragma once
 
 #include <atomic>
-#include <deque>
 #include <filesystem>
-#include <future>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -18,6 +16,7 @@
 #include "sip_gateway/audio/port.hpp"
 #include "sip_gateway/audio/recorder.hpp"
 #include "sip_gateway/backend/ws_client.hpp"
+#include "sip_gateway/sip/tts_pipeline.hpp"
 #include "sip_gateway/vad/processor.hpp"
 
 namespace sip_gateway {
@@ -62,12 +61,6 @@ public:
     void onCallTransferStatus(pj::OnCallTransferStatusParam& prm) override;
 
 private:
-    struct TtsTask {
-        std::string text;
-        std::shared_future<std::optional<std::filesystem::path>> future;
-        std::shared_ptr<std::atomic<bool>> canceled;
-    };
-
     void open_media();
     void close_media();
     void set_state(CallState state);
@@ -94,6 +87,9 @@ private:
     void try_play_tts();
     std::filesystem::path make_tts_path() const;
     std::string recording_basename() const;
+    std::optional<std::filesystem::path> synthesize_tts_text(
+        const std::string& text,
+        const std::shared_ptr<std::atomic<bool>>& canceled);
 
     SipApp& app_;
     BackendWsClient ws_client_;
@@ -115,8 +111,7 @@ private:
     std::unique_ptr<audio::AudioMediaPort> media_port_;
     std::unique_ptr<audio::CallRecorder> recorder_;
     std::unique_ptr<audio::SmartPlayer> player_;
-    std::deque<TtsTask> tts_queue_;
-    mutable std::mutex tts_mutex_;
+    std::unique_ptr<TtsPipeline> tts_pipeline_;
     std::unique_ptr<vad::StreamingVadProcessor> vad_processor_;
     std::mutex generation_mutex_;
     bool start_in_flight_ = false;

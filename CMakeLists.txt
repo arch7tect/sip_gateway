@@ -40,6 +40,7 @@ add_executable(sip_gateway
     src/sip/app.cpp
     src/sip/account.cpp
     src/sip/call.cpp
+    src/sip/tts_pipeline.cpp
     src/server/rest_server.cpp
     src/metrics.cpp
     src/vad/model.cpp
@@ -58,6 +59,7 @@ add_executable(sip_gateway
     include/sip_gateway/sip/app.hpp
     include/sip_gateway/sip/account.hpp
     include/sip_gateway/sip/call.hpp
+    include/sip_gateway/sip/tts_pipeline.hpp
     include/sip_gateway/server/rest_server.hpp
     include/sip_gateway/metrics.hpp
     include/sip_gateway/vad/model.hpp

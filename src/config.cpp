@@ -276,6 +276,7 @@ Config Config::load() {
     config.show_waiting_messages = get_env_bool("SHOW_WAITING_MESSAGES", false);
 
     config.log_name = get_env_str("LOG_NAME", "sip_gateway");
+    config.tts_max_inflight = get_env_int("TTS_MAX_INFLIGHT", 3);
 
     return config;
 }
@@ -304,6 +305,9 @@ void Config::validate() const {
     }
     if (sip_media_thread_cnt < 0) {
         throw std::runtime_error("SIP_MEDIA_THREAD_CNT must be zero or positive");
+    }
+    if (tts_max_inflight <= 0) {
+        throw std::runtime_error("TTS_MAX_INFLIGHT must be positive");
     }
 }
 

@@ -6,24 +6,43 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <limits>
 #include <thread>
-#include <cctype>
 
 #include "sip_gateway/logging.hpp"
 #include "sip_gateway/metrics.hpp"
 #include "sip_gateway/sip/app.hpp"
 #include "sip_gateway/utils/async.hpp"
 #include "sip_gateway/utils/text.hpp"
-#include "sip_gateway/vad/model.hpp"
 
 namespace sip_gateway {
 
 SipCall::SipCall(SipApp& app, pj::Account& account, std::string backend_url, int call_id)
     : pj::Call(account, call_id),
       app_(app),
-      ws_client_(std::move(backend_url)) {}
+      ws_client_(std::move(backend_url)) {
+    tts_pipeline_ = std::make_unique<TtsPipeline>(
+        app_.config().tts_max_inflight,
+        [this](const std::string& text,
+               const std::shared_ptr<std::atomic<bool>>& canceled) {
+            return synthesize_tts_text(text, canceled);
+        },
+        [this](const std::filesystem::path& path, const std::string& text) {
+            logging::debug(
+                "TTS ready for playback",
+                {kv("text", text),
+                 kv("session_id", session_id_.value_or(""))});
+            if (!player_) {
+                return;
+            }
+            player_->enqueue(path, true);
+            player_->play();
+            if (vad_processor_) {
+                vad_processor_->reset_user_salience();
+            }
+        },
+        [this]() { try_play_tts(); });
+}
 
 SipCall::~SipCall() {
     close_media();
@@ -864,25 +883,14 @@ bool SipCall::start_transfer() {
 }
 
 void SipCall::cancel_tts_queue() {
-    std::lock_guard<std::mutex> lock(tts_mutex_);
-    for (auto& task : tts_queue_) {
-        if (task.canceled) {
-            task.canceled->store(true);
-        }
+    if (tts_pipeline_) {
+        tts_pipeline_->cancel();
     }
-    tts_queue_.clear();
 }
 
 void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
     const auto sanitized = utils::remove_emojis(text);
     if (sanitized.empty()) {
-        return;
-    }
-    if (delay_sec > 0.0) {
-        utils::run_async([this, sanitized, delay_sec]() {
-            std::this_thread::sleep_for(std::chrono::duration<double>(delay_sec));
-            enqueue_tts_text(sanitized, 0.0);
-        });
         return;
     }
     if (!session_id_) {
@@ -895,125 +903,83 @@ void SipCall::enqueue_tts_text(const std::string& text, double delay_sec) {
         "TTS queued for synthesis",
         {kv("text", sanitized),
          kv("session_id", session_id_.value_or(""))});
-    auto canceled = std::make_shared<std::atomic<bool>>(false);
-    auto task_ptr = std::make_shared<
-        std::packaged_task<std::optional<std::filesystem::path>()>>(
-        [this, sanitized, canceled]() -> std::optional<std::filesystem::path> {
-            if (canceled->load()) {
-                return std::nullopt;
-            }
-            std::optional<std::chrono::steady_clock::time_point> response_start;
-            {
-                std::lock_guard<std::mutex> lock(generation_mutex_);
-                response_start = start_response_generation_;
-            }
-            try {
-                const auto synth_start = std::chrono::steady_clock::now();
-                const auto blob = app_.synthesize_session_audio(*session_id_, sanitized);
-                const auto synth_elapsed = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - synth_start).count();
-                if (response_start) {
-                    Metrics::instance().observe_response_time("synthesize", synth_elapsed);
-                }
-                if (canceled->load()) {
-                    return std::nullopt;
-                }
-                if (blob.size() < 364) {
-                    logging::info(
-                        "TTS audio too short",
-                        {kv("blob_size", static_cast<int>(blob.size())),
-                         kv("session_id", session_id_.value_or(""))});
-                    return std::nullopt;
-                }
-                if (response_start) {
-                    const auto response_elapsed = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - *response_start).count();
-                    Metrics::instance().observe_response_time("play_queue", response_elapsed);
-                    Metrics::instance().observe_response_summary("play_queue", response_elapsed);
-                    logging::debug(
-                        "Response ready",
-                        {kv("elapsed_sec", response_elapsed),
-                         kv("session_id", session_id_.value_or(""))});
-                    std::lock_guard<std::mutex> lock(generation_mutex_);
-                    start_response_generation_.reset();
-                }
-                const auto filename = make_tts_path();
-                std::error_code ec;
-                std::filesystem::create_directories(filename.parent_path(), ec);
-                std::ofstream out(filename, std::ios::binary);
-                out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
-                out.close();
-                return filename;
-            } catch (const std::exception& ex) {
-                logging::error(
-                    "TTS synthesize failed",
-                    {kv("error", ex.what()),
-                     kv("session_id", session_id_.value_or(""))});
-                return std::nullopt;
-            }
-        });
-    auto future = task_ptr->get_future().share();
-    {
-        std::lock_guard<std::mutex> lock(tts_mutex_);
-        tts_queue_.push_back({sanitized, future, canceled});
+    if (tts_pipeline_) {
+        tts_pipeline_->enqueue(sanitized, delay_sec);
     }
-    utils::run_async([this, task_ptr]() {
-        (*task_ptr)();
-        try_play_tts();
-    });
-    try_play_tts();
+}
+
+std::optional<std::filesystem::path> SipCall::synthesize_tts_text(
+    const std::string& text,
+    const std::shared_ptr<std::atomic<bool>>& canceled) {
+    if (!session_id_) {
+        return std::nullopt;
+    }
+    if (canceled && canceled->load()) {
+        return std::nullopt;
+    }
+    std::optional<std::chrono::steady_clock::time_point> response_start;
+    {
+        std::lock_guard<std::mutex> lock(generation_mutex_);
+        response_start = start_response_generation_;
+    }
+    try {
+        const auto synth_start = std::chrono::steady_clock::now();
+        const auto blob = app_.synthesize_session_audio(*session_id_, text);
+        const auto synth_elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - synth_start).count();
+        if (response_start) {
+            Metrics::instance().observe_response_time("synthesize", synth_elapsed);
+        }
+        if (canceled && canceled->load()) {
+            return std::nullopt;
+        }
+        if (blob.size() < 364) {
+            logging::info(
+                "TTS audio too short",
+                {kv("blob_size", static_cast<int>(blob.size())),
+                 kv("session_id", session_id_.value_or(""))});
+            return std::nullopt;
+        }
+        if (response_start) {
+            const auto response_elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - *response_start).count();
+            Metrics::instance().observe_response_time("play_queue", response_elapsed);
+            Metrics::instance().observe_response_summary("play_queue", response_elapsed);
+            logging::debug(
+                "Response ready",
+                {kv("elapsed_sec", response_elapsed),
+                 kv("session_id", session_id_.value_or(""))});
+            std::lock_guard<std::mutex> lock(generation_mutex_);
+            start_response_generation_.reset();
+        }
+        const auto filename = make_tts_path();
+        std::error_code ec;
+        std::filesystem::create_directories(filename.parent_path(), ec);
+        std::ofstream out(filename, std::ios::binary);
+        out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+        out.close();
+        return filename;
+    } catch (const std::exception& ex) {
+        logging::error(
+            "TTS synthesize failed",
+            {kv("error", ex.what()),
+             kv("session_id", session_id_.value_or(""))});
+        return std::nullopt;
+    }
 }
 
 void SipCall::try_play_tts() {
-    if (!media_active_ || !player_) {
+    if (!tts_pipeline_) {
         return;
     }
-    while (true) {
-        TtsTask task;
-        {
-            std::lock_guard<std::mutex> lock(tts_mutex_);
-            if (tts_queue_.empty()) {
-                return;
-            }
-            auto& front = tts_queue_.front();
-            if (front.future.wait_for(std::chrono::seconds(0)) !=
-                std::future_status::ready) {
-                return;
-            }
-            task = front;
-            tts_queue_.pop_front();
-        }
-        if (task.canceled && task.canceled->load()) {
-            continue;
-        }
-        std::optional<std::filesystem::path> audio_path;
-        try {
-            audio_path = task.future.get();
-        } catch (const std::exception& ex) {
-            logging::error(
-                "TTS playback failed",
-                {kv("error", ex.what()),
-                 kv("session_id", session_id_.value_or(""))});
-            continue;
-        }
-        if (!audio_path || audio_path->empty()) {
-            continue;
-        }
-        logging::debug(
-            "TTS ready for playback",
-            {kv("text", task.text),
-             kv("session_id", session_id_.value_or(""))});
-        player_->enqueue(*audio_path, true);
-        player_->play();
-        if (vad_processor_) {
-            vad_processor_->reset_user_salience();
-        }
-    }
+    tts_pipeline_->try_play(media_active_ && player_);
 }
 
 bool SipCall::has_tts_queue() const {
-    std::lock_guard<std::mutex> lock(tts_mutex_);
-    return !tts_queue_.empty();
+    if (!tts_pipeline_) {
+        return false;
+    }
+    return tts_pipeline_->has_queue();
 }
 
 void SipCall::set_state(CallState state) {
